@@ -1,4 +1,4 @@
-# PremiumDeluxeMotorsport.NET
+# PremiumDeluxeMotorsport.NET Enhanced
 Premium Deluxe Motorsport Car Shop Mod for Grand Theft Auto V
 
 Features:
