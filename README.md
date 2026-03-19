@@ -69,6 +69,6 @@ Special thanks to the following individuals who contributed alongside **Im Not M
 - **Gixer** & **david** — Spanish  
 - **MMK_033** — Russian
 
-[ MIRRORS ]
+### [ MIRRORS ]
 - [**gta5-mods**](https://www.gta5-mods.com/vehicles)
 - [**Nexus Mods**](https://www.nexusmods.com/gta5enhanced/mods/563)
