@@ -30,7 +30,8 @@ ___________________________________
 - Function to search vehicles
 - Better Addon Vehicle Support
 - Function to toggle headlights on/off in vehicle viewer
-
+- Bring back the star system when first viewing a vehicle
+- 
 ## [ **CHANGELOG** ]
 **Quick Fix v1.0.1**
 - Fixed an issue where the info popup wasn't displaying the roof or door toggle functions
