@@ -1065,6 +1065,9 @@ namespace PremiumDeluxeRevamped
                 ResetSelection(CustomiseMenu);
                 ResetSelection(ConfirmMenu);
                 ResetSelection(MainMenu);
+
+                lastVisibleMenu = null;
+                lastVisibleMenuSeenAt = 0;
             }
             catch (Exception ex)
             {
