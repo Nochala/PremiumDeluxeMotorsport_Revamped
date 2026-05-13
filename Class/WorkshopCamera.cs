@@ -140,8 +140,8 @@ namespace PremiumDeluxeRevamped
                 GameplayCamera.FieldOfView);
 
             _target = lowrider;
-            _targetPos = lowrider.Position;
-            _mainCamera.PointAt(lowrider);
+            _targetPos = new Vector3(lowrider.Position.X, lowrider.Position.Y, Helper.VehPreviewPos.Z + 0.6f);
+            _mainCamera.PointAt(_targetPos);
 
             if (IsValidStoredCameraPose(lowrider, Helper.CameraPos, Helper.CameraRot))
             {
@@ -720,8 +720,8 @@ namespace PremiumDeluxeRevamped
                     RotationMode = CameraRotationMode.Around;
                     if (_internalCameraPosition != CameraPosition.Car && _internalCameraPosition != CameraPosition.Interior)
                     {
-                        _mainCamera.PointAt(_target);
-                        _targetPos = _target.Position;
+                        _targetPos = new Vector3(_target.Position.X, _target.Position.Y, Helper.VehPreviewPos.Z + 0.6f);
+                        _mainCamera.PointAt(_targetPos);
                         _cameraZoom = 5.0f;
                         CameraClamp = new CameraClamp { MaxVerticalValue = -40.0f, MinVerticalValue = -3.0f };
                         _mainCamera.Shake(CameraShake.Hand, 0.5f);
