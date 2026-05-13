@@ -419,6 +419,9 @@ namespace PremiumDeluxeRevamped
                 Helper.PdmDoorDist = World.GetDistance(Helper.GPC.Position, Helper.PdmDoor);
                 HandlePdmCrimeState();
 
+                try { MenuHelper.ProcessPendingPreviewSwap(); }
+                catch (Exception ex) { logger.Log(ex.Message + " " + ex.StackTrace); }
+
                 try
                 {
                     if (Helper.PdmDoorDist < 10.0f && !pdmStoreClosedForCrime)

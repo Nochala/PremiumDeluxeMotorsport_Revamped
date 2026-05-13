@@ -81,6 +81,8 @@ namespace PremiumDeluxeRevamped
         private const string CategoryActionSearchVehicles = "SEARCH_VEHICLES";
         private const int PerformanceUpgradePrice = 77500;
         private static int PreviewVehicleBasePrice;
+        private static Tuple<string, int, string, string> pendingPreviewRequest;
+        private static int pendingPreviewRequestQueuedAt;
         public static int LegitimatePdmVehicleHandle { get; private set; }
         public static int LegitimatePdmVehicleUntil { get; private set; }
 
@@ -1284,25 +1286,90 @@ namespace PremiumDeluxeRevamped
                 {
                     return;
                 }
+
                 Helper.SelectedVehicle = t.Item3;
-                CleanupVehicleViewerArea();
-                Helper.VehPreview?.Delete();
-                if (sender.Items[index].Title.IndexOf("NULL", StringComparison.OrdinalIgnoreCase) < 0)
+                Helper.VehicleName = t.Item3;
+                Helper.optLastVehMake = t.Item4;
+                Helper.ShowVehicleName = true;
+                PreviewVehicleBasePrice = t.Item2;
+                Helper.VehiclePrice = PreviewVehicleBasePrice;
+
+                pendingPreviewRequest = t;
+                pendingPreviewRequestQueuedAt = Game.GameTime;
+            }
+            catch (Exception ex)
+            {
+                logger.Log(ex.Message + " " + ex.StackTrace);
+            }
+        }
+
+        private const int PendingPreviewDebounceMs = 100;
+
+        public static void ProcessPendingPreviewSwap()
+        {
+            Tuple<string, int, string, string> t = pendingPreviewRequest;
+            if (t == null)
+            {
+                return;
+            }
+            if (Game.GameTime - pendingPreviewRequestQueuedAt < PendingPreviewDebounceMs)
+            {
+                return;
+            }
+            pendingPreviewRequest = null;
+
+            Vehicle oldPreview = Helper.VehPreview;
+            Vehicle newPreview = null;
+
+            try
+            {
+                bool isNullEntry = string.Equals(t.Item3, "NULL", StringComparison.OrdinalIgnoreCase)
+                    || (t.Item1 != null && t.Item1.IndexOf("NULL", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                if (!isNullEntry)
                 {
+                    GTA.Math.Vector3 hiddenSpawn = Helper.VehPreviewPos + new GTA.Math.Vector3(0f, 0f, -200f);
                     if (Helper.optFade)
                     {
                         FadeOut(200);
                         Script.Wait(200);
-                        Helper.VehPreview = Helper.CreateVehicle(t.Item1, Helper.VehPreviewPos, Helper.Radius);
+                        newPreview = Helper.CreateVehicle(t.Item1, hiddenSpawn, Helper.Radius);
                         Script.Wait(200);
                         FadeIn(200);
                     }
                     else
                     {
-                        Helper.VehPreview = Helper.CreateVehicle(t.Item1, Helper.VehPreviewPos, Helper.Radius);
+                        newPreview = Helper.CreateVehicle(t.Item1, hiddenSpawn, Helper.Radius);
+                    }
+
+                    if (newPreview != null && newPreview.Exists())
+                    {
+                        try { newPreview.IsVisible = false; } catch { }
+                        try { newPreview.IsCollisionEnabled = false; } catch { }
+                        try { newPreview.IsPositionFrozen = true; } catch { }
                     }
                 }
-                if (Helper.optRandomColor && Helper.VehPreview != null)
+
+                if (newPreview == null || !newPreview.Exists())
+                {
+                    try { oldPreview?.Delete(); } catch { }
+                    Helper.VehPreview = null;
+                    CleanupVehicleViewerArea();
+                    return;
+                }
+
+                try { newPreview.IsPositionFrozen = false; } catch { }
+                try { newPreview.Position = Helper.VehPreviewPos; } catch { }
+                try { newPreview.Heading = Helper.Radius; } catch { }
+                try { newPreview.IsCollisionEnabled = true; } catch { }
+                try { newPreview.IsVisible = true; } catch { }
+
+                Helper.VehPreview = newPreview;
+
+                try { oldPreview?.Delete(); } catch { }
+                CleanupVehicleViewerArea();
+
+                if (Helper.optRandomColor)
                 {
                     Random r = new Random();
                     int psc = r.Next(0, 160);
@@ -1314,15 +1381,9 @@ namespace PremiumDeluxeRevamped
                     Mods(Helper.VehPreview).RimColor = (VehicleColor)r.Next(0, 160);
                 }
                 Helper.UpdateVehPreview();
-                Helper.VehicleName = t.Item3;
-                Helper.optLastVehMake = t.Item4;
-                Helper.ShowVehicleName = true;
-                Helper.VehPreview.Heading = Helper.Radius;
                 Helper.VehPreview.IsUndriveable = true;
                 Helper.VehPreview.LockStatus = VehicleLockStatus.IgnoredByPlayer;
                 Helper.VehPreview.DirtLevel = 0f;
-                PreviewVehicleBasePrice = t.Item2;
-                Helper.VehiclePrice = PreviewVehicleBasePrice;
                 UpdatePerformanceUpgradeItemState();
                 Helper.wsCamera.RepositionFor(Helper.VehPreview);
                 Helper.optLastVehHash = Helper.VehPreview.Model.Hash;
@@ -1336,7 +1397,6 @@ namespace PremiumDeluxeRevamped
                     Helper.hiddenSave.SetValue("VEHICLES", Helper.VehPreview.Model.Hash.ToString(), 1);
                     Helper.hiddenSave.Save();
                 }
-
             }
             catch (Exception ex)
             {
