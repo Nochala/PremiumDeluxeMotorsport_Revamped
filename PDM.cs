@@ -445,7 +445,8 @@ namespace PremiumDeluxeRevamped
 
                 if (!Helper.GPC.IsInVehicle() && !Helper.GPC.IsDead && Helper.PdmDoorDist < 3.0f && Helper.GP.Wanted.WantedLevel == 0 && Helper.TaskScriptStatus == -1 && !pdmStoreClosedForCrime)
                 {
-                    Helper.DisplayHelpTextThisFrame(Gxt("SHR_MENU"));
+                    Function.Call(Hash.BEGIN_TEXT_COMMAND_DISPLAY_HELP, "SHR_MENU");
+                    Function.Call(Hash.END_TEXT_COMMAND_DISPLAY_HELP, 0, false, true, -1);
                 }
                 else if (!Helper.GPC.IsInVehicle() && !Helper.GPC.IsDead && Helper.PdmDoorDist < 3.0f && Helper.GP.Wanted.WantedLevel >= 1)
                 {
