@@ -32,7 +32,6 @@ ___________________________________
 ### [ Planned Upcoming Features ]
 - Sell vehicles at Premium Deluxe Motorsport
 - Display brand logo of vehicles 
-- Better Addon Vehicle Support
   
 ## Credits
 ### Primary Credits
