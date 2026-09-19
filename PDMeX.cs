@@ -1736,6 +1736,7 @@ namespace PremiumDeluxeRevamped
             MenuHelper.RefreshMouseBehaviors();
             MenuHelper.RefreshInstructionalButtons();
             MenuHelper._menuPool?.Process();
+            MenuHelper.ProcessPendingVehicleChange();
             MenuHelper.RecoverHiddenMenuIfNeeded();
 
             if (Helper.HideHud)
@@ -1756,7 +1757,6 @@ namespace PremiumDeluxeRevamped
                     LemonUI.Tools.GameScreen.ShowCursorThisFrame();
                 }
 
-                DrawMenuBanner();
                 DrawCurrentSectionLabel();
                 DrawVehiclePriceLabel();
                 DrawVehicleStatsPanel();

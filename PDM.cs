@@ -41,8 +41,6 @@ namespace PremiumDeluxeRevamped
         private static int recentlyUsedPdmVehicleHandle;
         private static int recentlyUsedPdmVehicleUntil;
         private const int RecentlyUsedPdmVehicleGraceMs = 300000;
-
-        // Helper to safely call Notification.PostTicker; falls back to Screen.ShowSubtitle on Nightly
         private static void SafePostTicker(string message, bool flash)
         {
             try
@@ -56,7 +54,7 @@ namespace PremiumDeluxeRevamped
             }
             catch
             {
-                // Reflection failed; fall through to subtitle
+                // fall through to subtitle
             }
 
             // Fallback for SHVDN Nightly or any other failure
@@ -75,7 +73,8 @@ namespace PremiumDeluxeRevamped
                 Helper.BtnRotLeft = new InstructionalButton(LocalizedOrDefault("CMM_MOD_S6", "Doors"), Helper.keyDoor);
                 Helper.BtnRotRight = new InstructionalButton(LocalizedOrDefault("CMOD_MOD_ROF", "Roof"), Helper.keyRoof);
                 Helper.BtnCamera = new InstructionalButton(LocalizedOrDefault("CTRL_0", "Camera"), Helper.keyCamera);
-                Helper.BtnZoom = new InstructionalButton(LocalizedOrDefault("HUD_INPUT91", "Zoom"), Helper.keyZoom);
+                Helper.BtnZoom = new InstructionalButton(LocalizedOrDefault("INPUT_CREATOR_ZOOM_IN_DISPLAYONLY", "Zoom In"), Helper.keyZoom);
+                Helper.BtnZoomOut = new InstructionalButton(LocalizedOrDefault("INPUT_CREATOR_ZOOM_OUT_DISPLAYONLY", "Zoom Out"), Helper.keyZoomOut);
 
                 CreateEntrance();
                 GlobalVariable.Get((int)Helper.GetGlobalValue()).Write(1);
@@ -595,23 +594,31 @@ namespace PremiumDeluxeRevamped
                         }
                     }
 
-                    if (Game.IsControlJustPressed(Helper.keyZoom) && Helper.wsCamera.MainCameraPosition == CameraPosition.Car)
+                    if ((Game.IsControlPressed(Helper.keyZoom)
+                        || Function.Call<bool>(Hash.IS_DISABLED_CONTROL_PRESSED, 0, (int)Helper.keyZoom))
+                        && Helper.wsCamera.MainCameraPosition != CameraPosition.Interior)
                     {
-                        if (Math.Abs(Helper.wsCamera.CameraZoom - 5.0f) < 0.01f)
+                        if (Helper.wsCamera.CameraZoom > 3.0f)
                         {
-                            while (Helper.wsCamera.CameraZoom > 3.5f)
-                            {
-                                Yield();
-                                Helper.wsCamera.CameraZoom -= 0.1f;
-                            }
+                            Helper.wsCamera.CameraZoom -= 0.1f;
                         }
                         else
                         {
-                            while (Helper.wsCamera.CameraZoom < 5.0f)
-                            {
-                                Yield();
-                                Helper.wsCamera.CameraZoom += 0.1f;
-                            }
+                            Helper.wsCamera.CameraZoom = 3.0f;
+                        }
+                    }
+
+                    if ((Game.IsControlPressed(Helper.keyZoomOut)
+                        || Function.Call<bool>(Hash.IS_DISABLED_CONTROL_PRESSED, 0, (int)Helper.keyZoomOut))
+                        && Helper.wsCamera.MainCameraPosition != CameraPosition.Interior)
+                    {
+                        if (Helper.wsCamera.CameraZoom < 6.0f)
+                        {
+                            Helper.wsCamera.CameraZoom += 0.1f;
+                        }
+                        else
+                        {
+                            Helper.wsCamera.CameraZoom = 6.0f;
                         }
                     }
                 }

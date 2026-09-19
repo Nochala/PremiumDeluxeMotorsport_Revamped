@@ -2,11 +2,13 @@ using GTA;
 using GTA.Native;
 using GTA.UI;
 using LemonUI;
+using LemonUI.Elements;
 using LemonUI.Menus;
 using LemonUI.Scaleform;
 using LemonUI.Tools;
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using GameScreen = LemonUI.Tools.GameScreen;
 using GtaScreen = GTA.UI.Screen;
 
@@ -69,6 +71,7 @@ namespace PremiumDeluxeRevamped
         private static int lastVisibleMenuSeenAt;
         private const int HiddenMenuRecoveryDelayMs = 150;
         private const string SelectionMarker = ">>";
+        private const string SubmenuIndicator = ">>>";
         private static readonly Dictionary<NativeItem, string> PreservedSubmenuAltTitles = new Dictionary<NativeItem, string>();
         private const float ViewerSpawnCleanupSearchRadius = 6.0f;
         private const float ViewerSpawnCleanupDeleteRadius = 2.9f;
@@ -80,8 +83,12 @@ namespace PremiumDeluxeRevamped
         private const int VehicleMenuBaseMaxTitleLength = 30;
         private const int VehicleMenuMinTitleLength = 20;
         private const string CategoryActionSearchVehicles = "SEARCH_VEHICLES";
+        private const string EmergencyCategoryKey = "emergency";
         private const int PerformanceUpgradePrice = 77500;
         private static int PreviewVehicleBasePrice;
+        private static Model PendingPreviewModel;
+        private static Tuple<string, int, string, string> PendingVehicleSelection;
+        private static bool HasPendingVehicleChange;
         public static int LegitimatePdmVehicleHandle { get; private set; }
         public static int LegitimatePdmVehicleUntil { get; private set; }
 
@@ -194,6 +201,273 @@ namespace PremiumDeluxeRevamped
             }
         }
 
+        private static int ResolveConfiguredVehiclePrice(string modelName, decimal configuredPrice, string makeKey)
+        {
+            int basePrice = Math.Max((int)configuredPrice, 0);
+            if (!Helper.optRealisticVehPricing)
+            {
+                return basePrice;
+            }
+
+            try
+            {
+                Model model = new Model(modelName);
+                int vehicleClass = model.IsValid
+                    ? Function.Call<int>(Hash.GET_VEHICLE_CLASS_FROM_NAME, model.Hash)
+                    : -1;
+
+                if (vehicleClass == 18)
+                {
+                    return ResolveEmergencyVehiclePrice(modelName, basePrice, makeKey);
+                }
+
+                int minimumPrice;
+                int maximumPrice;
+                GetRealisticPriceRange(vehicleClass, out minimumPrice, out maximumPrice);
+
+                double normalizedPriceSignal = GetAdaptiveConfiguredPriceSignal(basePrice, GetConfiguredPricePivot(vehicleClass), 0.32d);
+                double curvedSignal = Math.Pow(normalizedPriceSignal, GetConfiguredPriceCurve(vehicleClass));
+                double estimatedPrice = minimumPrice + ((maximumPrice - minimumPrice) * curvedSignal);
+                estimatedPrice *= GetManufacturerPriceMultiplier(makeKey);
+
+                double lowerClamp = minimumPrice * 0.90d;
+                double upperClamp = maximumPrice * 1.15d;
+                estimatedPrice = Math.Max(lowerClamp, Math.Min(upperClamp, estimatedPrice));
+
+                return RoundRealisticVehiclePrice(estimatedPrice);
+            }
+            catch (Exception ex)
+            {
+                logger.Log("Error ResolveConfiguredVehiclePrice " + ex.Message + " " + ex.StackTrace);
+                return basePrice;
+            }
+        }
+
+        private static double GetAdaptiveConfiguredPriceSignal(int configuredPrice, double pivotPrice, double defaultSignal)
+        {
+            if (configuredPrice <= 0)
+            {
+                return defaultSignal;
+            }
+
+            double safePivot = Math.Max(pivotPrice, 1d);
+            double ratio = configuredPrice / (configuredPrice + safePivot);
+            double signal = Math.Pow(ratio, 0.72d);
+            return Math.Max(0.04d, Math.Min(0.985d, signal));
+        }
+
+        private static double GetConfiguredPricePivot(int vehicleClass)
+        {
+            switch (vehicleClass)
+            {
+                case 0: return 650000d;
+                case 1: return 1100000d;
+                case 2: return 1500000d;
+                case 3: return 1300000d;
+                case 4: return 1400000d;
+                case 5: return 1800000d;
+                case 6: return 1900000d;
+                case 7: return 2600000d;
+                case 8: return 900000d;
+                case 9: return 1600000d;
+                case 10: return 1900000d;
+                case 11: return 1000000d;
+                case 12: return 1000000d;
+                case 13: return 50000d;
+                case 14: return 1800000d;
+                case 15: return 3200000d;
+                case 16: return 4500000d;
+                case 17: return 1200000d;
+                case 19: return 3200000d;
+                case 20: return 2200000d;
+                case 22: return 3000000d;
+                default: return 1500000d;
+            }
+        }
+
+        private static double GetConfiguredPriceCurve(int vehicleClass)
+        {
+            switch (vehicleClass)
+            {
+                case 5:
+                case 7:
+                case 14:
+                case 15:
+                case 16:
+                case 19:
+                case 22:
+                    return 1.08d;
+                default:
+                    return 1.0d;
+            }
+        }
+
+        private static int ResolveEmergencyVehiclePrice(string modelName, int configuredPrice, string makeKey)
+        {
+            int minimumPrice;
+            int maximumPrice;
+            double pivotPrice;
+            GetEmergencyVehiclePriceRange(modelName, out minimumPrice, out maximumPrice, out pivotPrice);
+
+            double normalizedPriceSignal = GetAdaptiveConfiguredPriceSignal(configuredPrice, pivotPrice, 0.35d);
+            double estimatedPrice = minimumPrice + ((maximumPrice - minimumPrice) * normalizedPriceSignal);
+
+            double manufacturerMultiplier = GetManufacturerPriceMultiplier(makeKey);
+            estimatedPrice *= 1.0d + ((manufacturerMultiplier - 1.0d) * 0.65d);
+
+            double lowerClamp = minimumPrice * 0.95d;
+            double upperClamp = maximumPrice * 1.10d;
+            estimatedPrice = Math.Max(lowerClamp, Math.Min(upperClamp, estimatedPrice));
+
+            return RoundRealisticVehiclePrice(estimatedPrice);
+        }
+
+        private static void GetEmergencyVehiclePriceRange(string modelName, out int minimumPrice, out int maximumPrice, out double pivotPrice)
+        {
+            string model = (modelName ?? string.Empty).Trim().ToLowerInvariant();
+
+            if (model == "ambulance")
+            {
+                minimumPrice = 220000;
+                maximumPrice = 380000;
+                pivotPrice = 900000d;
+                return;
+            }
+
+            if (model == "firetruk")
+            {
+                minimumPrice = 500000;
+                maximumPrice = 950000;
+                pivotPrice = 1200000d;
+                return;
+            }
+
+            if (model.StartsWith("policeb", StringComparison.Ordinal))
+            {
+                minimumPrice = 24000;
+                maximumPrice = 42000;
+                pivotPrice = 1200000d;
+                return;
+            }
+
+            if (model == "riot" || model == "riot2")
+            {
+                minimumPrice = 280000;
+                maximumPrice = 700000;
+                pivotPrice = 2200000d;
+                return;
+            }
+
+            if (model == "pbus")
+            {
+                minimumPrice = 160000;
+                maximumPrice = 280000;
+                pivotPrice = 1300000d;
+                return;
+            }
+
+            if (model.StartsWith("policet", StringComparison.Ordinal))
+            {
+                minimumPrice = 52000;
+                maximumPrice = 95000;
+                pivotPrice = 1600000d;
+                return;
+            }
+
+            if (model == "fbi2"
+                || model == "sheriff2"
+                || model == "policeold1"
+                || model == "poldorado"
+                || model == "polcaracara"
+                || model == "polterminus"
+                || model == "pranger"
+                || model == "lguard")
+            {
+                minimumPrice = 52000;
+                maximumPrice = 120000;
+                pivotPrice = 1900000d;
+                return;
+            }
+
+            if (model == "polgauntlet"
+                || model == "poldominator10"
+                || model == "polcoquette4"
+                || model == "polbuffalo6"
+                || model == "polignus")
+            {
+                minimumPrice = 70000;
+                maximumPrice = 210000;
+                pivotPrice = 2700000d;
+                return;
+            }
+
+            minimumPrice = 45000;
+            maximumPrice = 105000;
+            pivotPrice = 1800000d;
+        }
+
+        private static void GetRealisticPriceRange(int vehicleClass, out int minimumPrice, out int maximumPrice)
+        {
+            switch (vehicleClass)
+            {
+                case 0: minimumPrice = 18000; maximumPrice = 45000; return;
+                case 1: minimumPrice = 24000; maximumPrice = 95000; return;
+                case 2: minimumPrice = 30000; maximumPrice = 160000; return;
+                case 3: minimumPrice = 30000; maximumPrice = 140000; return;
+                case 4: minimumPrice = 32000; maximumPrice = 125000; return;
+                case 5: minimumPrice = 40000; maximumPrice = 900000; return;
+                case 6: minimumPrice = 45000; maximumPrice = 320000; return;
+                case 7: minimumPrice = 180000; maximumPrice = 3500000; return;
+                case 8: minimumPrice = 8000; maximumPrice = 45000; return;
+                case 9: minimumPrice = 28000; maximumPrice = 130000; return;
+                case 10: minimumPrice = 65000; maximumPrice = 240000; return;
+                case 11: minimumPrice = 22000; maximumPrice = 100000; return;
+                case 12: minimumPrice = 26000; maximumPrice = 90000; return;
+                case 13: minimumPrice = 500; maximumPrice = 9000; return;
+                case 14: minimumPrice = 25000; maximumPrice = 1500000; return;
+                case 15: minimumPrice = 300000; maximumPrice = 8000000; return;
+                case 16: minimumPrice = 150000; maximumPrice = 20000000; return;
+                case 17: minimumPrice = 25000; maximumPrice = 160000; return;
+                case 18: minimumPrice = 45000; maximumPrice = 105000; return;
+                case 19: minimumPrice = 90000; maximumPrice = 3000000; return;
+                case 20: minimumPrice = 80000; maximumPrice = 300000; return;
+                case 22: minimumPrice = 750000; maximumPrice = 3500000; return;
+                default: minimumPrice = 25000; maximumPrice = 180000; return;
+            }
+        }
+
+        private static double GetManufacturerPriceMultiplier(string makeKey)
+        {
+            string make = (makeKey ?? string.Empty).ToUpperInvariant();
+
+            if (make.Contains("TRUFFADE")) return 1.18d;
+            if (make.Contains("PROGEN")) return 1.15d;
+            if (make.Contains("OVERFLOD")) return 1.15d;
+            if (make.Contains("PEGASSI")) return 1.12d;
+            if (make.Contains("GROTTI")) return 1.12d;
+            if (make.Contains("ENUS")) return 1.10d;
+            if (make.Contains("DEWBAUCHEE")) return 1.08d;
+            if (make.Contains("LAMPADATI")) return 1.08d;
+            if (make.Contains("PFISTER")) return 1.07d;
+            if (make.Contains("OCELOT")) return 1.06d;
+            if (make.Contains("BENEFACTOR")) return 1.05d;
+            if (make.Contains("OBEY")) return 1.04d;
+            if (make.Contains("COIL")) return 1.04d;
+            if (make.Contains("UBERMACHT")) return 1.03d;
+            if (make.Contains("KARIN")) return 0.94d;
+            if (make.Contains("DINKA")) return 0.94d;
+            if (make.Contains("MAIBATSU")) return 0.95d;
+            if (make.Contains("WEENY")) return 0.95d;
+
+            return 1.0d;
+        }
+
+        private static int RoundRealisticVehiclePrice(double price)
+        {
+            int increment = price >= 500000d ? 5000 : price >= 100000d ? 1000 : 500;
+            return Math.Max(increment, (int)(Math.Round(price / increment, MidpointRounding.AwayFromZero) * increment));
+        }
+
         public static int ResolveVehiclePrice(int modelHash, string fallbackVehicleName = null)
         {
             try
@@ -212,8 +486,23 @@ namespace PremiumDeluxeRevamped
 
                         if (decimal.TryParse(format[ii]["price"], out decimal parsedPrice))
                         {
-                            return (int)parsedPrice;
+                            return ResolveConfiguredVehiclePrice(modelName, parsedPrice, format[ii]["make"]);
                         }
+                    }
+                }
+
+                for (int i = 0; i < Helper.AddonVehicles.Count; i++)
+                {
+                    Helper.AddonVehicleDefinition addon = Helper.AddonVehicles[i];
+                    if (addon == null)
+                    {
+                        continue;
+                    }
+
+                    Model addonModel = new Model(addon.ModelName);
+                    if (addonModel.IsValid && addonModel.Hash == modelHash)
+                    {
+                        return ResolveConfiguredVehiclePrice(addon.ModelName, addon.Price, addon.Make);
                     }
                 }
             }
@@ -259,6 +548,144 @@ namespace PremiumDeluxeRevamped
             }
 
             return value;
+        }
+
+        private static string GetVehicleCategoryDisplayName(string categoryKey)
+        {
+            if (string.Equals(categoryKey, EmergencyCategoryKey, StringComparison.OrdinalIgnoreCase))
+            {
+                return "Emergency";
+            }
+
+            return CleanMenuText(Helper.GetLangEntry(categoryKey), categoryKey);
+        }
+
+        private static int GetAddonVehicleCountForCategory(string categoryKey)
+        {
+            int count = 0;
+            for (int i = 0; i < Helper.AddonVehicles.Count; i++)
+            {
+                Helper.AddonVehicleDefinition addon = Helper.AddonVehicles[i];
+                if (addon != null && string.Equals(addon.CategoryKey, categoryKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private static string GetAddonVehicleDisplayName(Helper.AddonVehicleDefinition addon)
+        {
+            if (addon == null || string.IsNullOrWhiteSpace(addon.ModelName))
+            {
+                return "Unnamed";
+            }
+
+            try
+            {
+                Model model = new Model(addon.ModelName);
+                string displayLabel = model.IsValid
+                    ? Function.Call<string>(Hash.GET_DISPLAY_NAME_FROM_VEHICLE_MODEL, model.Hash)
+                    : string.Empty;
+                string localizedName = string.IsNullOrWhiteSpace(displayLabel)
+                    ? string.Empty
+                    : Gxt(displayLabel);
+
+                if (string.IsNullOrWhiteSpace(localizedName)
+                    || string.Equals(localizedName, "NULL", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(localizedName, "CARNOTFOUND", StringComparison.OrdinalIgnoreCase))
+                {
+                    localizedName = addon.ModelName;
+                }
+
+                return localizedName;
+            }
+            catch
+            {
+                return addon.ModelName;
+            }
+        }
+
+        private static HashSet<int> GetConfiguredVehicleModelHashes()
+        {
+            HashSet<int> hashes = new HashSet<int>();
+
+            try
+            {
+                foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeMotorsport\Vehicles\", "*.ini"))
+                {
+                    if (!System.IO.File.Exists(file))
+                    {
+                        continue;
+                    }
+
+                    Reader format = new Reader(file, Parameters);
+                    for (int i = 0; i < format.Count; i++)
+                    {
+                        Model model = new Model(format[i]["model"]);
+                        if (model.IsValid)
+                        {
+                            hashes.Add(model.Hash);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Log("Error GetConfiguredVehicleModelHashes " + ex.Message + " " + ex.StackTrace);
+            }
+
+            return hashes;
+        }
+
+        private static void AddAddonVehiclesToMenu(NativeMenu menu, string categoryKey, string searchQuery, HashSet<int> existingModelHashes)
+        {
+            if (menu == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < Helper.AddonVehicles.Count; i++)
+            {
+                Helper.AddonVehicleDefinition addon = Helper.AddonVehicles[i];
+                if (addon == null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(categoryKey)
+                    && !string.Equals(addon.CategoryKey, categoryKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                Model model = new Model(addon.ModelName);
+                if (!model.IsValid || !model.IsInCdImage)
+                {
+                    continue;
+                }
+
+                if (existingModelHashes != null && existingModelHashes.Contains(model.Hash))
+                {
+                    continue;
+                }
+
+                string modelDisplayName = GetAddonVehicleDisplayName(addon);
+                if (!string.IsNullOrWhiteSpace(searchQuery)
+                    && !DoesVehicleNameMatchSearch(searchQuery, modelDisplayName, addon.ModelName))
+                {
+                    continue;
+                }
+
+                int vehiclePrice = ResolveConfiguredVehiclePrice(addon.ModelName, addon.Price, addon.Make);
+                string fullVehicleName = CleanMenuText(((addon.Make ?? string.Empty) + " " + modelDisplayName).Trim(), addon.ModelName);
+                AddVehicleItemToMenu(menu, addon.ModelName, vehiclePrice, fullVehicleName, addon.Make);
+
+                if (existingModelHashes != null)
+                {
+                    existingModelHashes.Add(model.Hash);
+                }
+            }
         }
 
         private static string BuildVehicleMenuTitle(string fullVehicleName, decimal price)
@@ -348,6 +775,7 @@ namespace PremiumDeluxeRevamped
                 }
                 AddInstructionalButtonIfValid(menu, Helper.BtnCamera);
                 AddInstructionalButtonIfValid(menu, Helper.BtnZoom);
+                AddInstructionalButtonIfValid(menu, Helper.BtnZoomOut);
             }
         }
 
@@ -773,6 +1201,16 @@ namespace PremiumDeluxeRevamped
             {
                 MouseBehavior = GetConfiguredMouseBehavior(),
             };
+
+            try
+            {
+                menu.Banner = new ScaledTexture(PointF.Empty, new SizeF(0f, 108f), "shopui_title_premium_deluxe_motorsport", "shopui_title_premium_deluxe_motorsport");
+            }
+            catch (Exception ex)
+            {
+                logger.Log("NewMenu banner setup failed for '" + (title ?? string.Empty) + "': " + ex.Message);
+            }
+
             AddInstructionalButtons(menu);
             _menuPool ??= new ObjectPool();
             _menuPool.Add(menu);
@@ -784,7 +1222,7 @@ namespace PremiumDeluxeRevamped
         {
             NativeMenu menu = NewMenu(title, showStats);
             RemoveDuplicateParentRows(parentMenu, parentItem, title);
-            NativeSubmenuItem sub = new NativeSubmenuItem(menu, parentMenu);
+            NativeSubmenuItem sub = new NativeSubmenuItem(menu, parentMenu, SubmenuIndicator);
             if (parentItem != null)
             {
                 sub.Title = CleanMenuText(parentItem.Title, title);
@@ -817,6 +1255,7 @@ namespace PremiumDeluxeRevamped
             AddInstructionalButtonIfValid(menu, Helper.BtnRotRight);
             AddInstructionalButtonIfValid(menu, Helper.BtnCamera);
             AddInstructionalButtonIfValid(menu, Helper.BtnZoom);
+            AddInstructionalButtonIfValid(menu, Helper.BtnZoomOut);
         }
 
         public static void HideAllMenus()
@@ -968,15 +1407,38 @@ namespace PremiumDeluxeRevamped
             };
             MainMenu.Add(searchVehiclesItem);
 
+            HashSet<string> addedCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeMotorsport\Vehicles\", "*.ini"))
             {
                 if (System.IO.File.Exists(file))
                 {
                     string categoryKey = System.IO.Path.GetFileNameWithoutExtension(file);
-                    itemCat = new NativeItem(CleanMenuText(Helper.GetLangEntry(categoryKey), categoryKey));
-                    itemCat.Tag = Tuple.Create(System.IO.File.ReadAllLines(file).Length, categoryKey);
+                    itemCat = new NativeItem(GetVehicleCategoryDisplayName(categoryKey))
+                    {
+                        AltTitle = SubmenuIndicator,
+                    };
+                    int categoryCount = System.IO.File.ReadAllLines(file).Length + GetAddonVehicleCountForCategory(categoryKey);
+                    itemCat.Tag = Tuple.Create(categoryCount, categoryKey);
                     MainMenu.Add(itemCat);
+                    addedCategories.Add(categoryKey);
                 }
+            }
+
+            for (int i = 0; i < Helper.AddonVehicles.Count; i++)
+            {
+                Helper.AddonVehicleDefinition addon = Helper.AddonVehicles[i];
+                if (addon == null || string.IsNullOrWhiteSpace(addon.CategoryKey) || addedCategories.Contains(addon.CategoryKey))
+                {
+                    continue;
+                }
+
+                itemCat = new NativeItem(GetVehicleCategoryDisplayName(addon.CategoryKey))
+                {
+                    AltTitle = SubmenuIndicator,
+                };
+                itemCat.Tag = Tuple.Create(GetAddonVehicleCountForCategory(addon.CategoryKey), addon.CategoryKey);
+                MainMenu.Add(itemCat);
+                addedCategories.Add(addon.CategoryKey);
             }
 
             ResetSelection(MainMenu);
@@ -1293,67 +1755,136 @@ namespace PremiumDeluxeRevamped
         {
             try
             {
-                Tuple<string, int, string, string> t = sender.Items[index].Tag as Tuple<string, int, string, string>;
-                if (t == null)
+                if (sender == null || index < 0 || index >= sender.Items.Count)
                 {
                     return;
                 }
 
-                Helper.SelectedVehicle = t.Item3;
-                Helper.VehicleName = t.Item3;
-                PreviewVehicleBasePrice = Math.Max(t.Item2, 0);
-                Helper.VehiclePrice = PreviewVehicleBasePrice;
-                CleanupVehicleViewerArea();
-                Helper.VehPreview?.Delete();
-                if (sender.Items[index].Title.IndexOf("NULL", StringComparison.OrdinalIgnoreCase) < 0)
-                 
+                Tuple<string, int, string, string> t = sender.Items[index].Tag as Tuple<string, int, string, string>;
+                if (t == null || sender.Items[index].Title.IndexOf("NULL", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    if (Helper.optFade)
-                    {
-                        FadeOut(200);
-                        Script.Wait(200);
-                        Helper.VehPreview = Helper.CreateVehicle(t.Item1, Helper.VehPreviewPos, Helper.Radius);
-                        Script.Wait(200);
-                        FadeIn(200);
-                    }
-                    else
-                    {
-                        Helper.VehPreview = Helper.CreateVehicle(t.Item1, Helper.VehPreviewPos, Helper.Radius);
-                    }
+                    return;
                 }
 
-                if (Helper.optRandomColor && Helper.VehPreview != null)
-                {
-                    Random r = new Random();
-                    int psc = r.Next(0, 160);
-                    Mods(Helper.VehPreview).PrimaryColor = (VehicleColor)psc;
-                    Mods(Helper.VehPreview).SecondaryColor = (VehicleColor)psc;
-                    Mods(Helper.VehPreview).PearlescentColor = (VehicleColor)r.Next(0, 160);
-                    Mods(Helper.VehPreview).TrimColor = (VehicleColor)r.Next(0, 160);
-                    Mods(Helper.VehPreview).DashboardColor = (VehicleColor)r.Next(0, 160);
-                    Mods(Helper.VehPreview).RimColor = (VehicleColor)r.Next(0, 160);
-                }
-                Helper.UpdateVehPreview();
-                Helper.VehPreview.IsUndriveable = true;
-                Helper.VehPreview.LockStatus = VehicleLockStatus.IgnoredByPlayer;
-                Helper.VehPreview.DirtLevel = 0f;
-                UpdatePerformanceUpgradeItemState();
-                Helper.wsCamera.RepositionFor(Helper.VehPreview);
-                Helper.optLastVehHash = Helper.VehPreview.Model.Hash;
-                Helper.optLastVehName = Helper.VehicleName;
-                Helper.config.SetValue("SETTINGS", "LastVehHash", Helper.VehPreview.Model.Hash);
-                Helper.config.SetValue("SETTINGS", "LastVehName", Helper.VehicleName);
-                Helper.config.Save();
+                ClearPendingVehicleChange();
 
-                if (Helper.hiddenSave.GetValue("VEHICLES", Helper.VehPreview.Model.Hash.ToString(), 0) == 0)
+                Model model = new Model(t.Item1);
+                if (!model.IsInCdImage || !model.IsValid)
                 {
-                    Helper.hiddenSave.SetValue("VEHICLES", Helper.VehPreview.Model.Hash.ToString(), 1);
-                    Helper.hiddenSave.Save();
+                    model.MarkAsNoLongerNeeded();
+                    return;
                 }
+
+                PendingPreviewModel = model;
+                PendingVehicleSelection = t;
+                HasPendingVehicleChange = true;
+                Function.Call(Hash.REQUEST_MODEL, model.Hash);
             }
             catch (Exception ex)
             {
                 logger.Log(ex.Message + " " + ex.StackTrace);
+            }
+        }
+
+        private static void ClearPendingVehicleChange()
+        {
+            if (HasPendingVehicleChange)
+            {
+                try
+                {
+                    PendingPreviewModel.MarkAsNoLongerNeeded();
+                }
+                catch
+                {
+                }
+            }
+
+            PendingVehicleSelection = null;
+            HasPendingVehicleChange = false;
+        }
+
+        public static void ProcessPendingVehicleChange()
+        {
+            if (!HasPendingVehicleChange || PendingVehicleSelection == null)
+            {
+                return;
+            }
+
+            if (VehicleMenu == null || !VehicleMenu.Visible || Helper.TaskScriptStatus != 0)
+            {
+                ClearPendingVehicleChange();
+                return;
+            }
+
+            try
+            {
+                Function.Call(Hash.REQUEST_MODEL, PendingPreviewModel.Hash);
+                if (!Function.Call<bool>(Hash.HAS_MODEL_LOADED, PendingPreviewModel.Hash))
+                {
+                    return;
+                }
+
+                Tuple<string, int, string, string> selection = PendingVehicleSelection;
+                Model model = PendingPreviewModel;
+                PendingVehicleSelection = null;
+                HasPendingVehicleChange = false;
+
+                Vehicle previousVehicle = Helper.VehPreview;
+                Vehicle nextVehicle = World.CreateVehicle(model, Helper.VehPreviewPos, Helper.Radius);
+                model.MarkAsNoLongerNeeded();
+
+                if (nextVehicle == null || !nextVehicle.Exists())
+                {
+                    return;
+                }
+
+                Helper.VehPreview = nextVehicle;
+                Helper.SelectedVehicle = selection.Item3;
+                Helper.VehicleName = selection.Item3;
+                PreviewVehicleBasePrice = Math.Max(selection.Item2, 0);
+                Helper.VehiclePrice = PreviewVehicleBasePrice;
+
+                if (Helper.optRandomColor)
+                {
+                    Random r = new Random();
+                    int psc = r.Next(0, 160);
+                    Mods(nextVehicle).PrimaryColor = (VehicleColor)psc;
+                    Mods(nextVehicle).SecondaryColor = (VehicleColor)psc;
+                    Mods(nextVehicle).PearlescentColor = (VehicleColor)r.Next(0, 160);
+                    Mods(nextVehicle).TrimColor = (VehicleColor)r.Next(0, 160);
+                    Mods(nextVehicle).DashboardColor = (VehicleColor)r.Next(0, 160);
+                    Mods(nextVehicle).RimColor = (VehicleColor)r.Next(0, 160);
+                }
+
+                Helper.UpdateVehPreview();
+                nextVehicle.IsUndriveable = true;
+                nextVehicle.LockStatus = VehicleLockStatus.IgnoredByPlayer;
+                nextVehicle.DirtLevel = 0f;
+                UpdatePerformanceUpgradeItemState();
+                Helper.wsCamera.RetargetFor(nextVehicle);
+
+                if (previousVehicle != null && previousVehicle.Exists() && previousVehicle.Handle != nextVehicle.Handle)
+                {
+                    previousVehicle.Delete();
+                }
+
+                CleanupVehicleViewerArea();
+                Helper.optLastVehHash = nextVehicle.Model.Hash;
+                Helper.optLastVehName = Helper.VehicleName;
+                Helper.hiddenSave.SetValue("SETTINGS", "LASTVEHHASH", nextVehicle.Model.Hash);
+                Helper.hiddenSave.SetValue("SETTINGS", "LASTVEHNAME", Helper.VehicleName);
+
+                if (Helper.hiddenSave.GetValue("VEHICLES", nextVehicle.Model.Hash.ToString(), 0) == 0)
+                {
+                    Helper.hiddenSave.SetValue("VEHICLES", nextVehicle.Model.Hash.ToString(), 1);
+                }
+
+                Helper.hiddenSave.Save();
+            }
+            catch (Exception ex)
+            {
+                logger.Log(ex.Message + " " + ex.StackTrace);
+                ClearPendingVehicleChange();
             }
         }
 
@@ -1608,7 +2139,7 @@ namespace PremiumDeluxeRevamped
                     return;
                 }
 
-                CreateVehicleMenu($@".\scripts\PremiumDeluxeMotorsport\Vehicles\{t.Item2}.ini", Helper.GetLangEntry(t.Item2));
+                CreateVehicleMenu($@".\scripts\PremiumDeluxeMotorsport\Vehicles\{t.Item2}.ini", GetVehicleCategoryDisplayName(t.Item2));
                 ShowOnly(VehicleMenu);
             }
             catch (Exception ex)
@@ -1660,6 +2191,7 @@ namespace PremiumDeluxeRevamped
                 }
 
                 VehicleMenu = NewMenu(CleanMenuText(Helper.GetLangEntry("BTN_SEARCH_RESULTS"), "Search Results").ToUpperInvariant(), true);
+                HashSet<int> existingModelHashes = new HashSet<int>();
 
                 foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeMotorsport\Vehicles\", "*.ini"))
                 {
@@ -1672,7 +2204,15 @@ namespace PremiumDeluxeRevamped
                     for (int ii = 0; ii < format.Count; ii++)
                     {
                         int i = (format.Count - 1) - ii;
+                        string configuredModelName = format[i]["model"];
+                        Model configuredModel = new Model(configuredModelName);
+                        if (configuredModel.IsValid)
+                        {
+                            existingModelHashes.Add(configuredModel.Hash);
+                        }
+
                         decimal parsedPrice = decimal.TryParse(format[i]["price"], out decimal parsed) ? parsed : 0m;
+                        int vehiclePrice = ResolveConfiguredVehiclePrice(configuredModelName, parsedPrice, format[i]["make"]);
                         string makeName = CleanMenuText(Gxt(format[i]["make"]), format[i]["make"]);
                         string localizedModelName = CleanMenuText(Gxt(format[i]["gxt"]), format[i]["name"]);
                         string rawModelName = CleanMenuText(format[i]["name"], localizedModelName);
@@ -1683,9 +2223,11 @@ namespace PremiumDeluxeRevamped
                             continue;
                         }
 
-                        AddVehicleItemToMenu(VehicleMenu, format[i]["model"], (int)parsedPrice, fullVehicleName, format[i]["make"]);
+                        AddVehicleItemToMenu(VehicleMenu, configuredModelName, vehiclePrice, fullVehicleName, format[i]["make"]);
                     }
                 }
+
+                AddAddonVehiclesToMenu(VehicleMenu, null, searchQuery, existingModelHashes);
 
                 if (VehicleMenu.Items.Count == 0)
                 {
@@ -1716,22 +2258,38 @@ namespace PremiumDeluxeRevamped
         {
             try
             {
-                Reader format = new Reader(file, Parameters);
                 if (VehicleMenu != null)
                 {
                     VehicleMenu.Visible = false;
                 }
 
                 VehicleMenu = NewMenu(subtitle.ToUpperInvariant(), true);
-                for (int ii = 0; ii < format.Count; ii++)
+                HashSet<int> existingModelHashes = GetConfiguredVehicleModelHashes();
+                string categoryKey = System.IO.Path.GetFileNameWithoutExtension(file);
+
+                if (System.IO.File.Exists(file))
                 {
-                    int i = (format.Count - 1) - ii;
-                    Helper.Price = decimal.TryParse(format[i]["price"], out decimal parsed) ? parsed : 0m;
-                    string makeName = CleanMenuText(Gxt(format[i]["make"]), format[i]["make"]);
-                    string modelName = CleanMenuText(Gxt(format[i]["gxt"]), format[i]["name"]);
-                    string fullVehicleName = CleanMenuText(($"{makeName} {modelName}").Trim(), format[i]["name"]);
-                    AddVehicleItemToMenu(VehicleMenu, format[i]["model"], (int)Helper.Price, fullVehicleName, format[i]["make"]);
+                    Reader format = new Reader(file, Parameters);
+                    for (int ii = 0; ii < format.Count; ii++)
+                    {
+                        int i = (format.Count - 1) - ii;
+                        string configuredModelName = format[i]["model"];
+                        Model configuredModel = new Model(configuredModelName);
+                        if (configuredModel.IsValid)
+                        {
+                            existingModelHashes.Add(configuredModel.Hash);
+                        }
+
+                        Helper.Price = decimal.TryParse(format[i]["price"], out decimal parsed) ? parsed : 0m;
+                        int vehiclePrice = ResolveConfiguredVehiclePrice(configuredModelName, Helper.Price, format[i]["make"]);
+                        string makeName = CleanMenuText(Gxt(format[i]["make"]), format[i]["make"]);
+                        string modelName = CleanMenuText(Gxt(format[i]["gxt"]), format[i]["name"]);
+                        string fullVehicleName = CleanMenuText(($"{makeName} {modelName}").Trim(), format[i]["name"]);
+                        AddVehicleItemToMenu(VehicleMenu, configuredModelName, vehiclePrice, fullVehicleName, format[i]["make"]);
+                    }
                 }
+
+                AddAddonVehiclesToMenu(VehicleMenu, categoryKey, null, existingModelHashes);
                 ResetSelection(VehicleMenu);
                 VehicleMenu.ItemActivated += (sender, args) => VehicleSelectHandler(sender as NativeMenu, args.Item, (sender as NativeMenu)?.SelectedIndex ?? 0);
                 VehicleMenu.SelectedIndexChanged += (sender, args) => VehicleChangeHandler(sender as NativeMenu, args.Index);
