@@ -128,6 +128,27 @@ namespace PremiumDeluxeRevamped
             _mainCamera = null;
         }
 
+        public void RetargetFor(Vehicle lowrider)
+        {
+            if (lowrider == null || !lowrider.Exists())
+            {
+                return;
+            }
+
+            if (_mainCamera == null || MainCameraPosition == CameraPosition.Interior)
+            {
+                RepositionFor(lowrider);
+                return;
+            }
+
+            _target = lowrider;
+            _targetPos = new Vector3(lowrider.Position.X, lowrider.Position.Y, lowrider.Position.Z);
+            _mainCamera.StopPointing();
+            _mainCamera.PointAt(_targetPos);
+            _cameraZoom = (_targetPos - _mainCamera.Position).Length();
+            EnsureCameraPoseIsSafe();
+        }
+
         public void RepositionFor(Vehicle lowrider)
         {
             if (lowrider == null)
@@ -147,7 +168,7 @@ namespace PremiumDeluxeRevamped
             _targetPos = new Vector3(lowrider.Position.X, lowrider.Position.Y, lowrider.Position.Z + targetHeight);
             _mainCamera.PointAt(_targetPos);
 
-            // Restore saved pose if valid
+            // Restore saved pose in=alid
             if (IsValidStoredCameraPose(lowrider, Helper.CameraPos, Helper.CameraRot))
             {
                 _mainCamera.Position = Helper.CameraPos;

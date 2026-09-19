@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -14,11 +16,30 @@ namespace PremiumDeluxeRevamped
 {
     public static class Helper
     {
+        public sealed class AddonVehicleDefinition
+        {
+            public string ModelName { get; private set; }
+            public string Make { get; private set; }
+            public string CategoryKey { get; private set; }
+            public decimal Price { get; private set; }
+
+            public AddonVehicleDefinition(string modelName, string make, string categoryKey, decimal price)
+            {
+                ModelName = modelName;
+                Make = make;
+                CategoryKey = categoryKey;
+                Price = price;
+            }
+        }
+
+        public static readonly List<AddonVehicleDefinition> AddonVehicles = new List<AddonVehicleDefinition>();
         public static string VC_MOTORCYCLE, VC_COMPACT, VC_COUPE, VC_SEDAN, VC_SPORT, VC_CLASSIC, VC_SUPER, VC_MUSCLE, VC_OFF_ROAD, VC_SUV, VC_VAN;
         public static string VC_INDUSTRIAL, VC_BICYCLE, VC_BOAT, VC_HELI, VC_PLANE, VC_SERVICE, VC_EMERGENCY, VC_MILITARY, VC_COMMERCIAL, VC_UTILITY;
 
-        public static ScriptSettings config = ScriptSettings.Load(@"scripts\PremiumDeluxeMotorsport\config.ini");
-        public static ScriptSettings hiddenSave = ScriptSettings.Load(@"scripts\PremiumDeluxeMotorsport\database.ini");
+        private const string ConfigPath = @"scripts\PremiumDeluxeMotorsport\config.ini";
+        private const string DatabasePath = @"scripts\PremiumDeluxeMotorsport\database.ini";
+        public static ScriptSettings config = ScriptSettings.Load(ConfigPath);
+        public static ScriptSettings hiddenSave = LoadDatabaseSettings();
         public static bool optRemoveColor = true;
         public static bool optRemoveImg = false;
         public static bool optRandomColor = true;
@@ -28,7 +49,9 @@ namespace PremiumDeluxeRevamped
         public static string optLastVehMake = null;
         public static bool optLogging = true;
         public static bool optEnableMouse = false;
+        public static bool optRealisticVehPricing = true;
         public static Control keyZoom = Control.NextCamera;
+        public static Control keyZoomOut = Control.FrontendLt;
         public static Control keyDoor = Control.ParachuteBrakeLeft;
         public static Control keyRoof = Control.VehicleRoof;
         public static Control keyCamera = Control.VehiclePushbikeSprint;
@@ -37,6 +60,7 @@ namespace PremiumDeluxeRevamped
         public static InstructionalButton BtnRotRight;
         public static InstructionalButton BtnCamera;
         public static InstructionalButton BtnZoom;
+        public static InstructionalButton BtnZoomOut;
 
         public static Vehicle VehPreview;
         public static Memory lastVehMemory;
@@ -62,20 +86,465 @@ namespace PremiumDeluxeRevamped
         public static Vector3 CameraRot = new Vector3(-18.12634f, 0f, -26.97177f);
         public static float PlayerHeading = 250.6701f;
 
+        private static ScriptSettings LoadDatabaseSettings()
+        {
+            int legacyLastVehHash = config.GetValue("SETTINGS", "LASTVEHHASH", -2022483795);
+            string legacyLastVehName = config.GetValue("SETTINGS", "LASTVEHNAME", "Pfister Comet Retro Custom");
+
+            try
+            {
+                EnsureDatabaseSettingsSection(legacyLastVehHash, legacyLastVehName);
+                RemoveLegacyLastVehicleSettingsFromConfig();
+            }
+            catch
+            {
+            }
+
+            return ScriptSettings.Load(DatabasePath);
+        }
+
+        private static void EnsureDatabaseSettingsSection(int legacyLastVehHash, string legacyLastVehName)
+        {
+            string directory = Path.GetDirectoryName(DatabasePath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            List<string> lines = File.Exists(DatabasePath)
+                ? new List<string>(File.ReadAllLines(DatabasePath))
+                : new List<string>();
+
+            int settingsStart = -1;
+            int settingsEnd = -1;
+            int firstSection = -1;
+
+            for (int i = 0; i < lines.Count; i++)
+            {
+                string trimmed = lines[i].Trim();
+                if (trimmed.Length < 3 || trimmed[0] != '[' || trimmed[trimmed.Length - 1] != ']')
+                {
+                    continue;
+                }
+
+                if (firstSection < 0)
+                {
+                    firstSection = i;
+                }
+
+                string sectionName = trimmed.Substring(1, trimmed.Length - 2).Trim();
+                if (settingsStart < 0 && sectionName.Equals("SETTINGS", StringComparison.OrdinalIgnoreCase))
+                {
+                    settingsStart = i;
+                    continue;
+                }
+
+                if (settingsStart >= 0 && settingsEnd < 0)
+                {
+                    settingsEnd = i;
+                    break;
+                }
+            }
+
+            if (settingsStart >= 0 && settingsEnd < 0)
+            {
+                settingsEnd = lines.Count;
+            }
+
+            bool hasLastVehHash = false;
+            bool hasLastVehName = false;
+            if (settingsStart >= 0)
+            {
+                for (int i = settingsStart + 1; i < settingsEnd; i++)
+                {
+                    string key = GetIniKey(lines[i]);
+                    if (key.Equals("LASTVEHHASH", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasLastVehHash = true;
+                    }
+                    else if (key.Equals("LASTVEHNAME", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasLastVehName = true;
+                    }
+                }
+            }
+
+            if (settingsStart == firstSection && hasLastVehHash && hasLastVehName)
+            {
+                return;
+            }
+
+            List<string> settingsLines = new List<string>();
+            if (settingsStart >= 0)
+            {
+                for (int i = settingsStart; i < settingsEnd; i++)
+                {
+                    settingsLines.Add(lines[i]);
+                }
+            }
+            else
+            {
+                settingsLines.Add("[SETTINGS]");
+            }
+
+            int insertIndex = 1;
+            if (!hasLastVehHash)
+            {
+                settingsLines.Insert(insertIndex++, "LASTVEHHASH = " + legacyLastVehHash);
+            }
+            if (!hasLastVehName)
+            {
+                settingsLines.Insert(insertIndex, "LASTVEHNAME = " + (legacyLastVehName ?? string.Empty));
+            }
+
+            List<string> remainingLines = new List<string>();
+            for (int i = 0; i < lines.Count; i++)
+            {
+                if (settingsStart >= 0 && i >= settingsStart && i < settingsEnd)
+                {
+                    continue;
+                }
+
+                remainingLines.Add(lines[i]);
+            }
+
+            while (remainingLines.Count > 0 && string.IsNullOrWhiteSpace(remainingLines[0]))
+            {
+                remainingLines.RemoveAt(0);
+            }
+
+            List<string> output = new List<string>(settingsLines);
+            if (remainingLines.Count > 0)
+            {
+                if (output.Count > 0 && !string.IsNullOrWhiteSpace(output[output.Count - 1]))
+                {
+                    output.Add(string.Empty);
+                }
+                output.AddRange(remainingLines);
+            }
+
+            File.WriteAllLines(DatabasePath, output.ToArray());
+        }
+
+        private static void RemoveLegacyLastVehicleSettingsFromConfig()
+        {
+            if (!File.Exists(ConfigPath))
+            {
+                return;
+            }
+
+            string[] lines = File.ReadAllLines(ConfigPath);
+            List<string> output = new List<string>(lines.Length);
+            string currentSection = string.Empty;
+            bool changed = false;
+
+            foreach (string line in lines)
+            {
+                string trimmed = line.Trim();
+                if (trimmed.Length >= 3 && trimmed[0] == '[' && trimmed[trimmed.Length - 1] == ']')
+                {
+                    currentSection = trimmed.Substring(1, trimmed.Length - 2).Trim();
+                    output.Add(line);
+                    continue;
+                }
+
+                if (currentSection.Equals("SETTINGS", StringComparison.OrdinalIgnoreCase))
+                {
+                    string key = GetIniKey(line);
+                    if (key.Equals("LASTVEHHASH", StringComparison.OrdinalIgnoreCase)
+                        || key.Equals("LASTVEHNAME", StringComparison.OrdinalIgnoreCase))
+                    {
+                        changed = true;
+                        continue;
+                    }
+                }
+
+                output.Add(line);
+            }
+
+            if (changed)
+            {
+                File.WriteAllLines(ConfigPath, output.ToArray());
+            }
+        }
+
+        private static string GetIniKey(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = line.Trim();
+            if (trimmed.StartsWith(";", StringComparison.Ordinal) || trimmed.StartsWith("#", StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+
+            int equalsIndex = trimmed.IndexOf('=');
+            if (equalsIndex <= 0)
+            {
+                return string.Empty;
+            }
+
+            return trimmed.Substring(0, equalsIndex).Trim();
+        }
+
         public static void LoadSettings()
         {
             optRemoveColor = config.GetValue("SETTINGS", "REMOVECOLOR", true);
             optRemoveImg = config.GetValue("SETTINGS", "REMOVESPRITE", false);
             optRandomColor = config.GetValue("SETTINGS", "RANDOMCOLOR", true);
             optFade = config.GetValue("SETTINGS", "FADEEFFECT", true);
-            optLastVehHash = config.GetValue("SETTINGS", "LASTVEHHASH", -2022483795);
-            optLastVehName = config.GetValue("SETTINGS", "LASTVEHNAME", "Pfister Comet Retro Custom");
+            optLastVehHash = hiddenSave.GetValue("SETTINGS", "LASTVEHHASH", -2022483795);
+            optLastVehName = hiddenSave.GetValue("SETTINGS", "LASTVEHNAME", "Pfister Comet Retro Custom");
             optLogging = config.GetValue("SETTINGS", "LOGGING", true);
             optEnableMouse = config.GetValue("SETTINGS", "ENABLEMOUSE", false);
+            optRealisticVehPricing = config.GetValue("SETTINGS", "RealisticVehPricing", true);
             keyZoom = config.GetValue("CONTROLS", "ZOOM", Control.FrontendRt);
+            keyZoomOut = config.GetValue("CONTROLS", "ZOOMOUT", Control.FrontendLt);
             keyDoor = config.GetValue("CONTROLS", "DOOR", Control.ParachuteBrakeLeft);
             keyRoof = config.GetValue("CONTROLS", "ROOF", Control.ParachuteBrakeRight);
             keyCamera = config.GetValue("CONTROLS", "CAMERA", Control.NextCamera);
+            LoadAddonVehicles();
+        }
+
+        private static void LoadAddonVehicles()
+        {
+            AddonVehicles.Clear();
+
+            try
+            {
+                if (!File.Exists(ConfigPath))
+                {
+                    return;
+                }
+
+                string currentSection = string.Empty;
+                Dictionary<string, int> modelIndexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (string rawLine in File.ReadAllLines(ConfigPath))
+                {
+                    string line = rawLine == null ? string.Empty : rawLine.Trim();
+                    if (line.Length == 0 || line.StartsWith(";", StringComparison.Ordinal) || line.StartsWith("#", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (line.Length >= 3 && line[0] == '[' && line[line.Length - 1] == ']')
+                    {
+                        currentSection = line.Substring(1, line.Length - 2).Trim();
+                        continue;
+                    }
+
+                    if (!currentSection.Equals("ADDONVEHICLES", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    int equalsIndex = line.IndexOf('=');
+                    if (equalsIndex <= 0 || equalsIndex >= line.Length - 1)
+                    {
+                        logger.Log("Skipping invalid ADDONVEHICLES entry: " + line);
+                        continue;
+                    }
+
+                    string modelName = line.Substring(0, equalsIndex).Trim();
+                    string value = StripAddonVehicleInlineComment(line.Substring(equalsIndex + 1)).Trim();
+                    string make;
+                    string vehicleClass;
+                    decimal price;
+                    if (!TryParseAddonVehicleValue(value, out make, out vehicleClass, out price))
+                    {
+                        logger.Log("Skipping invalid ADDONVEHICLES value for '" + modelName + "'. Expected: make, class, price.");
+                        continue;
+                    }
+
+                    string categoryKey = NormalizeAddonVehicleCategory(vehicleClass);
+                    if (string.IsNullOrEmpty(categoryKey))
+                    {
+                        logger.Log("Skipping ADDONVEHICLES model '" + modelName + "': unsupported class '" + vehicleClass + "'.");
+                        continue;
+                    }
+
+                    Model model = new Model(modelName);
+                    if (!model.IsValid || !model.IsInCdImage)
+                    {
+                        logger.Log("Skipping ADDONVEHICLES model '" + modelName + "': model is not installed or valid.");
+                        continue;
+                    }
+
+                    AddonVehicleDefinition definition = new AddonVehicleDefinition(modelName, make, categoryKey, Math.Max(price, 0m));
+                    int existingIndex;
+                    if (modelIndexes.TryGetValue(modelName, out existingIndex))
+                    {
+                        AddonVehicles[existingIndex] = definition;
+                    }
+                    else
+                    {
+                        modelIndexes.Add(modelName, AddonVehicles.Count);
+                        AddonVehicles.Add(definition);
+                    }
+                }
+
+                if (AddonVehicles.Count > 0)
+                {
+                    logger.Log("Loaded " + AddonVehicles.Count + " addon vehicle(s) from [ADDONVEHICLES].");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Log("Error loading [ADDONVEHICLES]: " + ex.Message + " " + ex.StackTrace);
+            }
+        }
+
+        private static string StripAddonVehicleInlineComment(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            int semicolonIndex = value.IndexOf(';');
+            int hashIndex = value.IndexOf('#');
+            int commentIndex = -1;
+            if (semicolonIndex >= 0 && hashIndex >= 0)
+            {
+                commentIndex = Math.Min(semicolonIndex, hashIndex);
+            }
+            else if (semicolonIndex >= 0)
+            {
+                commentIndex = semicolonIndex;
+            }
+            else if (hashIndex >= 0)
+            {
+                commentIndex = hashIndex;
+            }
+
+            return commentIndex >= 0 ? value.Substring(0, commentIndex) : value;
+        }
+
+        private static bool TryParseAddonVehicleValue(string value, out string make, out string vehicleClass, out decimal price)
+        {
+            make = string.Empty;
+            vehicleClass = string.Empty;
+            price = 0m;
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            string priceText;
+            if (value.IndexOf('|') >= 0)
+            {
+                string[] parts = value.Split(new[] { '|' }, 3);
+                if (parts.Length != 3)
+                {
+                    return false;
+                }
+
+                make = parts[0].Trim();
+                vehicleClass = parts[1].Trim();
+                priceText = parts[2].Trim();
+            }
+            else
+            {
+                int firstComma = value.IndexOf(',');
+                int secondComma = firstComma >= 0 ? value.IndexOf(',', firstComma + 1) : -1;
+                if (firstComma <= 0 || secondComma <= firstComma + 1 || secondComma >= value.Length - 1)
+                {
+                    return false;
+                }
+
+                make = value.Substring(0, firstComma).Trim();
+                vehicleClass = value.Substring(firstComma + 1, secondComma - firstComma - 1).Trim();
+                priceText = value.Substring(secondComma + 1).Trim();
+            }
+
+            if (string.IsNullOrWhiteSpace(make) || string.IsNullOrWhiteSpace(vehicleClass))
+            {
+                return false;
+            }
+
+            priceText = priceText.Replace("$", string.Empty).Replace(",", string.Empty).Trim();
+            return decimal.TryParse(priceText, NumberStyles.Number, CultureInfo.InvariantCulture, out price)
+                || decimal.TryParse(priceText, NumberStyles.Number, CultureInfo.CurrentCulture, out price);
+        }
+
+        private static string NormalizeAddonVehicleCategory(string vehicleClass)
+        {
+            string normalized = (vehicleClass ?? string.Empty).Trim().ToLowerInvariant();
+            normalized = normalized.Replace(" ", string.Empty).Replace("-", string.Empty).Replace("_", string.Empty);
+
+            switch (normalized)
+            {
+                case "armoured":
+                case "armored":
+                case "military":
+                    return "armoured";
+                case "classic":
+                case "classics":
+                case "sportsclassic":
+                case "sportsclassics":
+                    return "classic";
+                case "compact":
+                case "compacts":
+                    return "compact";
+                case "coupe":
+                case "coupes":
+                    return "coupe";
+                case "emergency":
+                case "emergencyvehicle":
+                case "emergencyvehicles":
+                    return "emergency";
+                case "exotic":
+                case "exotics":
+                case "super":
+                case "supercar":
+                case "supercars":
+                    return "exotic";
+                case "motorcycle":
+                case "motorcycles":
+                case "motorbike":
+                case "motorbikes":
+                case "bike":
+                case "bikes":
+                    return "motorcycle";
+                case "muscle":
+                case "musclecar":
+                case "musclecars":
+                    return "muscle";
+                case "offroad":
+                case "offroads":
+                    return "offroad";
+                case "openwheel":
+                case "openwheels":
+                case "formula":
+                    return "openwheel";
+                case "sedan":
+                case "sedans":
+                    return "sedan";
+                case "sport":
+                case "sports":
+                case "sportscar":
+                case "sportscars":
+                    return "sport";
+                case "suv":
+                case "suvs":
+                    return "suv";
+                case "utility":
+                case "utilities":
+                case "industrial":
+                case "commercial":
+                case "service":
+                    return "utility";
+                case "van":
+                case "vans":
+                    return "van";
+                default:
+                    return string.Empty;
+            }
         }
 
         private static string Gxt(string key) => Game.GetLocalizedString(key);
@@ -730,6 +1199,7 @@ namespace PremiumDeluxeRevamped
             Game.DisableControlThisFrame(keyDoor);
             Game.DisableControlThisFrame(keyRoof);
             Game.DisableControlThisFrame(keyZoom);
+            Game.DisableControlThisFrame(keyZoomOut);
         }
     }
 }
