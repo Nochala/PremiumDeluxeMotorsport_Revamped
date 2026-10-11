@@ -1731,8 +1731,21 @@ namespace PremiumDeluxeRevamped
             DrawVehicleStatRow("Traction", Helper.GetVehTraction(Helper.VehPreview), firstRowTop + (VehicleStatsRowSpacing * 3f), panelLeft);
         }
 
+        private bool menuWasOpen;
+
         private void PDMeX_Tick(object sender, EventArgs e)
         {
+            // Nothing open and nothing going on (no viewer, no HUD hidden): only let the pool run. Mouse,
+            // buttons and the hidden-menu recovery matter only while a menu is, or just was, open.
+            bool menuOpenNow = MenuHelper._menuPool != null && MenuHelper._menuPool.AreAnyVisible;
+            if (!menuOpenNow && !menuWasOpen && Helper.TaskScriptStatus == -1 && !Helper.HideHud)
+            {
+                MenuHelper._menuPool?.Process();
+                MenuHelper.ProcessPendingVehicleChange();
+                return;
+            }
+
+            menuWasOpen = menuOpenNow;
             MenuHelper.RefreshMouseBehaviors();
             MenuHelper.RefreshInstructionalButtons();
             MenuHelper._menuPool?.Process();

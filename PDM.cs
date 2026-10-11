@@ -419,7 +419,38 @@ namespace PremiumDeluxeRevamped
             }
         }
 
+        // Far from the store and with nothing going on (no menu, no viewer, no test drive) the tick has
+        // nothing to react to every frame: look again 4 times a second.
+        private const float PdmFarDistance = 200.0f;
+        private const int PdmFarCheckMs = 250;
+        private bool pdmFar;
+        private int pdmNextCheckMs;
+
         public void PDM_OnTick(object o, EventArgs e)
+        {
+            if (pdmFar && unchecked(Environment.TickCount - pdmNextCheckMs) < 0)
+            {
+                return;
+            }
+
+            PDM_OnTickCore(o, e);
+            UpdatePdmFarState();
+        }
+
+        private void UpdatePdmFarState()
+        {
+            bool menuVisible = MenuHelper._menuPool != null && MenuHelper._menuPool.AreAnyVisible;
+
+            pdmFar = Helper.TaskScriptStatus == -1
+                && Helper.TestDrive <= 1
+                && !Helper.HideHud
+                && !Helper.DrawSpotLight
+                && !menuVisible
+                && Helper.PdmDoorDist > PdmFarDistance;
+            pdmNextCheckMs = unchecked(Environment.TickCount + PdmFarCheckMs);
+        }
+
+        private void PDM_OnTickCore(object o, EventArgs e)
         {
             try
             {
