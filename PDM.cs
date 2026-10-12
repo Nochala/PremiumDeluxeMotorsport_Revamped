@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Reflection;
 using GTA;
@@ -41,6 +41,27 @@ namespace PremiumDeluxeRevamped
         private static int recentlyUsedPdmVehicleHandle;
         private static int recentlyUsedPdmVehicleUntil;
         private const int RecentlyUsedPdmVehicleGraceMs = 300000;
+        private const float PdmActiveDistanceSquared = 75.0f * 75.0f;
+        private const float PdmProximityDistanceSquared = 200.0f * 200.0f;
+        private const int PdmProximityUpdateIntervalMs = 100;
+        private const int PdmIdleUpdateIntervalMs = 250;
+        private const int PdmChairMaintenanceIntervalMs = 500;
+        private const float PdmFrontDoorDistanceSquared = 60.0f * 60.0f;
+        private const int PdmFrontDoorCheckIntervalMs = 1500;
+        private const int PdmFrontRightDoorModel = 1417577297;
+        private const int PdmFrontLeftDoorModel = 2059227086;
+        private const int PdmFrontRightDoorId = 0x3A6BF112;
+        private const int PdmFrontLeftDoorId = 0x3A6BF113;
+        private static readonly Vector3 PdmFrontRightDoorPosition = new Vector3(-60.54582f, -1094.749f, 26.88872f);
+        private static readonly Vector3 PdmFrontLeftDoorPosition = new Vector3(-59.89302f, -1092.952f, 26.88362f);
+        private int pdmTickInterval = -1;
+        private int pdmNextChairMaintenanceAt;
+        private bool pdmChairMaintenanceScheduled;
+        private int pdmNextFrontDoorCheckAt;
+        private bool pdmFrontDoorCheckScheduled;
+        private bool pdmFrontDoorErrorLogged;
+        private int pdmLastBlipAlpha = -1;
+        private static Prop pdmChair;
         private static void SafePostTicker(string message, bool flash)
         {
             try
@@ -419,28 +440,147 @@ namespace PremiumDeluxeRevamped
             }
         }
 
+        private void RefreshPdmBlip()
+        {
+            if (Helper.PdmBlip == null)
+            {
+                return;
+            }
+
+            int alpha = (Game.IsMissionActive || Helper.GP.Wanted.WantedLevel > 1 || pdmStoreClosedForCrime) ? 0 : 255;
+            if (alpha != pdmLastBlipAlpha)
+            {
+                Helper.PdmBlip.Alpha = alpha;
+                pdmLastBlipAlpha = alpha;
+            }
+        }
+
+        private static void UnlockPdmFrontDoor(int modelHash, Vector3 position, int fallbackDoorHash)
+        {
+            OutputArgument foundDoorHash = new OutputArgument();
+            int doorHash;
+            if (Function.Call<bool>(Hash.DOOR_SYSTEM_FIND_EXISTING_DOOR, position.X, position.Y, position.Z, modelHash, foundDoorHash))
+            {
+                doorHash = foundDoorHash.GetResult<int>();
+            }
+            else
+            {
+                if (!Function.Call<bool>(Hash.IS_DOOR_REGISTERED_WITH_SYSTEM, fallbackDoorHash))
+                {
+                    Function.Call(Hash.ADD_DOOR_TO_SYSTEM, fallbackDoorHash, modelHash, position.X, position.Y, position.Z, false, false, true);
+                }
+                doorHash = fallbackDoorHash;
+            }
+
+            if (!Function.Call<bool>(Hash.DOOR_SYSTEM_GET_IS_PHYSICS_LOADED, doorHash))
+            {
+                return;
+            }
+
+            int state = Function.Call<int>(Hash.DOOR_SYSTEM_GET_DOOR_STATE, doorHash);
+            if (state == 1 || state == 2 || state == 4)
+            {
+                Function.Call(Hash.DOOR_SYSTEM_SET_DOOR_STATE, doorHash, 0, false, true);
+            }
+        }
+
+        private void MaintainPdmFrontDoors(float distanceSquared)
+        {
+            if (distanceSquared > PdmFrontDoorDistanceSquared || Game.IsMissionActive)
+            {
+                pdmFrontDoorCheckScheduled = false;
+                return;
+            }
+
+            int now = Environment.TickCount;
+            if (pdmFrontDoorCheckScheduled && unchecked(now - pdmNextFrontDoorCheckAt) < 0)
+            {
+                return;
+            }
+
+            pdmNextFrontDoorCheckAt = unchecked(now + PdmFrontDoorCheckIntervalMs);
+            pdmFrontDoorCheckScheduled = true;
+            try
+            {
+                UnlockPdmFrontDoor(PdmFrontRightDoorModel, PdmFrontRightDoorPosition, PdmFrontRightDoorId);
+                UnlockPdmFrontDoor(PdmFrontLeftDoorModel, PdmFrontLeftDoorPosition, PdmFrontLeftDoorId);
+                pdmFrontDoorErrorLogged = false;
+            }
+            catch (Exception ex)
+            {
+                if (!pdmFrontDoorErrorLogged)
+                {
+                    logger.Log("Error Unlocking Front Doors " + ex.Message);
+                    pdmFrontDoorErrorLogged = true;
+                }
+            }
+        }
+
+        private void UpdatePdmTickInterval(float distanceSquared)
+        {
+            bool active = distanceSquared <= PdmActiveDistanceSquared
+                || Helper.TaskScriptStatus != -1
+                || Helper.TestDrive != 1
+                || Helper.HideHud
+                || Helper.DrawSpotLight
+                || (MenuHelper._menuPool != null && MenuHelper._menuPool.AreAnyVisible);
+
+            int targetInterval = active ? 0
+                : distanceSquared <= PdmProximityDistanceSquared ? PdmProximityUpdateIntervalMs
+                : PdmIdleUpdateIntervalMs;
+
+            if (pdmTickInterval != targetInterval)
+            {
+                Interval = targetInterval;
+                pdmTickInterval = targetInterval;
+            }
+        }
+
         public void PDM_OnTick(object o, EventArgs e)
         {
             try
             {
                 Helper.GP = Game.Player;
-                Helper.GPC = Game.Player.Character;
-                Helper.PlayerCash = Game.Player.Money;
+                Helper.GPC = Helper.GP.Character;
+                if (Helper.GPC == null)
+                {
+                    return;
+                }
 
-                Helper.PdmDoorDist = World.GetDistance(Helper.GPC.Position, Helper.PdmDoor);
+                float distanceSquared = Helper.GPC.Position.DistanceToSquared(Helper.PdmDoor);
+                UpdatePdmTickInterval(distanceSquared);
+                MaintainPdmFrontDoors(distanceSquared);
+                Helper.PlayerCash = Helper.GP.Money;
+                Helper.PdmDoorDist = (float)Math.Sqrt(distanceSquared);
                 HandlePdmCrimeState();
                 try
                 {
                     if (Helper.PdmDoorDist < 10.0f && !pdmStoreClosedForCrime)
                     {
-                        Prop chair = FindPdmChair();
-                        EnsurePdmPedSeated(chair);
+                        int now = Environment.TickCount;
+                        if (!pdmChairMaintenanceScheduled || unchecked(now - pdmNextChairMaintenanceAt) >= 0)
+                        {
+                            pdmNextChairMaintenanceAt = unchecked(now + PdmChairMaintenanceIntervalMs);
+                            pdmChairMaintenanceScheduled = true;
+                            if (pdmChair == null || !pdmChair.Exists())
+                            {
+                                pdmChair = FindPdmChair();
+                            }
+                            EnsurePdmPedSeated(pdmChair);
+                        }
+                    }
+                    else
+                    {
+                        pdmChair = null;
+                        pdmChairMaintenanceScheduled = false;
                     }
                 }
                 catch (Exception ex)
                 {
                     try { Helper.pdmPed?.Delete(); } catch { }
                     pdmPedNextSeatRetryAt = 0;
+                    pdmChair = null;
+                    pdmChairMaintenanceScheduled = false;
                     logger.Log("Error Create Ped " + ex.Message + " " + ex.StackTrace);
                 }
 
@@ -632,7 +772,7 @@ namespace PremiumDeluxeRevamped
                     }
                 }
 
-                Helper.PdmBlip.Alpha = (Game.IsMissionActive || Helper.GP.Wanted.WantedLevel > 1 || pdmStoreClosedForCrime) ? 0 : 255;
+                RefreshPdmBlip();
             }
             catch (Exception ex)
             {
@@ -648,6 +788,14 @@ namespace PremiumDeluxeRevamped
                 Helper.PdmBlip?.Delete();
                 GtaScreen.FadeIn(200);
                 Helper.pdmPed?.Delete();
+                pdmChair = null;
+                pdmLastBlipAlpha = -1;
+                pdmTickInterval = -1;
+                pdmNextChairMaintenanceAt = 0;
+                pdmChairMaintenanceScheduled = false;
+                pdmNextFrontDoorCheckAt = 0;
+                pdmFrontDoorCheckScheduled = false;
+                pdmFrontDoorErrorLogged = false;
                 pdmPedNextSeatRetryAt = 0;
                 pdmPedNextGreetingAt = 0;
                 clerkGreetedForCurrentVisit = false;

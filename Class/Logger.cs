@@ -11,7 +11,7 @@ namespace PremiumDeluxeRevamped
 
         public static bool Enabled => Helper.optLogging;
 
-        private static string LogDirectory => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PremiumDeluxeMotorsport");
+        private static string LogDirectory => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PremiumDeluxeRevamped");
         private static string LogFilePath => Path.Combine(LogDirectory, "PDM.log");
         private static string PinPointFilePath => Path.Combine(LogDirectory, "PinPoint.log");
 

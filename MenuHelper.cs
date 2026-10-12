@@ -65,6 +65,12 @@ namespace PremiumDeluxeRevamped
         public static ObjectPool _menuPool;
 
         private static readonly List<NativeMenu> RegisteredMenus = new List<NativeMenu>();
+        private static NativeMenu lastButtonMenu;
+        private static Vehicle lastButtonVehicle;
+        private static int lastButtonTaskStatus = int.MinValue;
+        private static bool hasLastMouseBehavior;
+        private static MenuMouseBehavior lastMouseBehavior;
+        private static int lastMouseMenuCount;
         private static readonly Dictionary<NativeMenu, string> RegisteredMenuTitles = new Dictionary<NativeMenu, string>();
         private static bool suppressCloseHandlers;
         private static NativeMenu lastVisibleMenu;
@@ -84,7 +90,8 @@ namespace PremiumDeluxeRevamped
         private const int VehicleMenuMinTitleLength = 20;
         private const string CategoryActionSearchVehicles = "SEARCH_VEHICLES";
         private const string EmergencyCategoryKey = "emergency";
-        private const int PerformanceUpgradePrice = 77500;
+        private const int DefaultPerformanceUpgradePrice = 20850;
+        private static int PreviewVehiclePerformancePrice = DefaultPerformanceUpgradePrice;
         private static int PreviewVehicleBasePrice;
         private static Model PendingPreviewModel;
         private static Tuple<string, int, string, string> PendingVehicleSelection;
@@ -145,6 +152,11 @@ namespace PremiumDeluxeRevamped
                 ? MenuMouseBehavior.Movement
                 : MenuMouseBehavior.Disabled;
 
+            if (hasLastMouseBehavior && lastMouseBehavior == desired && lastMouseMenuCount == RegisteredMenus.Count)
+            {
+                return;
+            }
+
             for (int i = 0; i < RegisteredMenus.Count; i++)
             {
                 NativeMenu menu = RegisteredMenus[i];
@@ -152,6 +164,43 @@ namespace PremiumDeluxeRevamped
                 {
                     menu.MouseBehavior = desired;
                 }
+            }
+
+            lastMouseBehavior = desired;
+            lastMouseMenuCount = RegisteredMenus.Count;
+            hasLastMouseBehavior = true;
+        }
+
+        public static void ProcessMenuMouseWheelScrolling()
+        {
+            if (!Helper.optEnableMouse || _menuPool == null || !_menuPool.AreAnyVisible)
+            {
+                return;
+            }
+
+            bool scrollUp = Game.IsControlJustPressed(Control.CursorScrollUp)
+                || Function.Call<bool>(Hash.IS_DISABLED_CONTROL_JUST_PRESSED, 0, (int)Control.CursorScrollUp);
+            bool scrollDown = Game.IsControlJustPressed(Control.CursorScrollDown)
+                || Function.Call<bool>(Hash.IS_DISABLED_CONTROL_JUST_PRESSED, 0, (int)Control.CursorScrollDown);
+
+            if (scrollUp == scrollDown)
+            {
+                return;
+            }
+
+            NativeMenu visibleMenu = GetVisibleMenu();
+            if (visibleMenu == null || visibleMenu.Items.Count == 0 || visibleMenu.MouseBehavior != MenuMouseBehavior.Movement)
+            {
+                return;
+            }
+
+            if (scrollUp)
+            {
+                visibleMenu.Previous();
+            }
+            else
+            {
+                visibleMenu.Next();
             }
         }
 
@@ -204,7 +253,7 @@ namespace PremiumDeluxeRevamped
         private static int ResolveConfiguredVehiclePrice(string modelName, decimal configuredPrice, string makeKey)
         {
             int basePrice = Math.Max((int)configuredPrice, 0);
-            if (!Helper.optRealisticVehPricing)
+            if (!Helper.optREALISTICPRICING)
             {
                 return basePrice;
             }
@@ -472,7 +521,7 @@ namespace PremiumDeluxeRevamped
         {
             try
             {
-                foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeMotorsport\Vehicles\", "*.ini"))
+                foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeRevamped\Vehicles\", "*.ini"))
                 {
                     Reader format = new Reader(file, Parameters);
                     for (int ii = 0; ii < format.Count; ii++)
@@ -612,7 +661,7 @@ namespace PremiumDeluxeRevamped
 
             try
             {
-                foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeMotorsport\Vehicles\", "*.ini"))
+                foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeRevamped\Vehicles\", "*.ini"))
                 {
                     if (!System.IO.File.Exists(file))
                     {
@@ -759,24 +808,34 @@ namespace PremiumDeluxeRevamped
 
         public static void RefreshInstructionalButtons()
         {
-            for (int i = 0; i < RegisteredMenus.Count; i++)
+            NativeMenu menu = GetVisibleMenu();
+            if (menu == null)
             {
-                NativeMenu menu = RegisteredMenus[i];
-                if (menu == null)
-                {
-                    continue;
-                }
-
-                menu.Buttons.Clear();
-                AddInstructionalButtonIfValid(menu, Helper.BtnRotLeft);
-                if (ShouldShowRoofInstructionalButton())
-                {
-                    AddInstructionalButtonIfValid(menu, Helper.BtnRotRight);
-                }
-                AddInstructionalButtonIfValid(menu, Helper.BtnCamera);
-                AddInstructionalButtonIfValid(menu, Helper.BtnZoom);
-                AddInstructionalButtonIfValid(menu, Helper.BtnZoomOut);
+                lastButtonMenu = null;
+                return;
             }
+
+            if (object.ReferenceEquals(menu, lastButtonMenu)
+                && object.ReferenceEquals(Helper.VehPreview, lastButtonVehicle)
+                && Helper.TaskScriptStatus == lastButtonTaskStatus)
+            {
+                return;
+            }
+
+            bool showRoof = ShouldShowRoofInstructionalButton();
+            menu.Buttons.Clear();
+            AddInstructionalButtonIfValid(menu, Helper.BtnRotLeft);
+            if (showRoof)
+            {
+                AddInstructionalButtonIfValid(menu, Helper.BtnRotRight);
+            }
+            AddInstructionalButtonIfValid(menu, Helper.BtnCamera);
+            AddInstructionalButtonIfValid(menu, Helper.BtnZoom);
+            AddInstructionalButtonIfValid(menu, Helper.BtnZoomOut);
+
+            lastButtonMenu = menu;
+            lastButtonVehicle = Helper.VehPreview;
+            lastButtonTaskStatus = Helper.TaskScriptStatus;
         }
 
         private static string NormalizeAltTitle(string value)
@@ -956,6 +1015,155 @@ namespace PremiumDeluxeRevamped
             }
         }
 
+        private static double GetPerformancePriceMultiplier(Vehicle vehicle)
+        {
+            int vehicleClass = Function.Call<int>(Hash.GET_VEHICLE_CLASS_FROM_NAME, vehicle.Model.Hash);
+            double multiplier;
+
+            switch (vehicleClass)
+            {
+                case 0:
+                case 10:
+                case 11:
+                case 12:
+                case 13:
+                case 17:
+                    multiplier = 1d;
+                    break;
+                case 1:
+                case 4:
+                case 8:
+                case 9:
+                case 20:
+                    multiplier = 1.5d;
+                    break;
+                case 2:
+                case 3:
+                case 18:
+                    multiplier = 2.5d;
+                    break;
+                case 5:
+                case 6:
+                case 14:
+                case 15:
+                case 16:
+                    multiplier = 3.25d;
+                    break;
+                case 7:
+                case 19:
+                case 22:
+                    multiplier = 5d;
+                    break;
+                default:
+                    multiplier = 1d;
+                    break;
+            }
+
+            int basePrice = PreviewVehicleBasePrice;
+            if (basePrice >= 1500000)
+            {
+                multiplier = Math.Max(multiplier, 5d);
+            }
+            else if (basePrice >= 350000)
+            {
+                multiplier = Math.Max(multiplier, 3.25d);
+            }
+            else if (basePrice >= 120000)
+            {
+                multiplier = Math.Max(multiplier, 2.5d);
+            }
+
+            int modKitType = 0;
+            try
+            {
+                modKitType = Function.Call<int>(Hash.GET_VEHICLE_MOD_KIT_TYPE, vehicle.Handle);
+            }
+            catch
+            {
+            }
+            switch (modKitType)
+            {
+                case 1:
+                    multiplier = Math.Max(multiplier, 3.25d);
+                    break;
+                case 2:
+                    multiplier = Math.Max(multiplier, 2.5d);
+                    break;
+                case 3:
+                    multiplier = Math.Max(multiplier, 5d);
+                    break;
+            }
+
+            return Math.Min(multiplier, 5d);
+        }
+
+        private static int GetAvailablePerformanceModCount(VehicleModCollection mods, VehicleModType modType)
+        {
+            try
+            {
+                return mods[modType].Count;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static int CapPerformanceUpgradePrice(int price)
+        {
+            return PreviewVehicleBasePrice > 0
+                ? Math.Min(price, (int)Math.Floor(PreviewVehicleBasePrice * 0.75d))
+                : price;
+        }
+
+        private static int GetPerformanceUpgradePrice(Vehicle vehicle)
+        {
+            if (vehicle == null || !vehicle.Exists())
+            {
+                return CapPerformanceUpgradePrice(DefaultPerformanceUpgradePrice);
+            }
+
+            try
+            {
+                VehicleModCollection mods = Mods(vehicle);
+                mods.InstallModKit();
+                double multiplier = GetPerformancePriceMultiplier(vehicle);
+                int total = 0;
+
+                if (GetAvailablePerformanceModCount(mods, VehicleModType.Armor) > 0)
+                {
+                    total += (int)Math.Floor(5000d * multiplier);
+                }
+                if (GetAvailablePerformanceModCount(mods, VehicleModType.Brakes) > 0)
+                {
+                    total += (int)Math.Floor(3500d * multiplier);
+                }
+                if (GetAvailablePerformanceModCount(mods, VehicleModType.Engine) > 0)
+                {
+                    total += (int)Math.Floor(3350d * multiplier);
+                }
+                if (GetAvailablePerformanceModCount(mods, VehicleModType.Transmission) > 0)
+                {
+                    total += (int)Math.Floor(4000d * multiplier);
+                }
+                int suspensionCount = GetAvailablePerformanceModCount(mods, VehicleModType.Suspension);
+                if (suspensionCount > 0)
+                {
+                    total += (int)Math.Floor((suspensionCount > 4 ? 2300d : 2200d) * multiplier);
+                }
+
+                total += (int)Math.Floor(2500d * multiplier);
+                total += (int)Math.Floor(300d * multiplier);
+
+                return CapPerformanceUpgradePrice(total);
+            }
+            catch (Exception ex)
+            {
+                logger.Log("Error GetPerformanceUpgradePrice " + ex.Message + " " + ex.StackTrace);
+                return CapPerformanceUpgradePrice(DefaultPerformanceUpgradePrice);
+            }
+        }
+
         private static void RefreshPreviewVehiclePrice()
         {
             int basePrice = PreviewVehicleBasePrice;
@@ -964,12 +1172,12 @@ namespace PremiumDeluxeRevamped
                 basePrice = Math.Max(Helper.VehiclePrice, 0);
             }
 
-            Helper.VehiclePrice = basePrice + (IsPerformanceUpgradeActive(Helper.VehPreview) ? PerformanceUpgradePrice : 0);
+            Helper.VehiclePrice = basePrice + (IsPerformanceUpgradeActive(Helper.VehPreview) ? PreviewVehiclePerformancePrice : 0);
         }
 
         private static string GetPerformanceUpgradeItemAltTitle()
         {
-            string amount = "$" + PerformanceUpgradePrice.ToString("N0");
+            string amount = "$" + PreviewVehiclePerformancePrice.ToString("N0");
             return IsPerformanceUpgradeActive(Helper.VehPreview)
                 ? "~r~-" + amount
                 : "~g~+" + amount;
@@ -982,6 +1190,7 @@ namespace PremiumDeluxeRevamped
                 return;
             }
 
+            PreviewVehiclePerformancePrice = GetPerformanceUpgradePrice(Helper.VehPreview);
             ItemPerformance.Title = IsPerformanceUpgradeActive(Helper.VehPreview)
                 ? GetPerformanceUpgradeRemoveTitle()
                 : GetPerformanceUpgradeApplyTitle();
@@ -1296,6 +1505,7 @@ namespace PremiumDeluxeRevamped
 
                     RestoreSubmenuAltTitles(menu);
                     menu.Visible = true;
+                    RefreshInstructionalButtons();
                     ResetSelection(menu);
                     lastVisibleMenu = menu;
                     lastVisibleMenuSeenAt = Game.GameTime;
@@ -1408,7 +1618,7 @@ namespace PremiumDeluxeRevamped
             MainMenu.Add(searchVehiclesItem);
 
             HashSet<string> addedCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeMotorsport\Vehicles\", "*.ini"))
+            foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeRevamped\Vehicles\", "*.ini"))
             {
                 if (System.IO.File.Exists(file))
                 {
@@ -1772,6 +1982,15 @@ namespace PremiumDeluxeRevamped
                 if (!model.IsInCdImage || !model.IsValid)
                 {
                     model.MarkAsNoLongerNeeded();
+                    return;
+                }
+
+                if (Helper.VehPreview != null && Helper.VehPreview.Exists()
+                    && Helper.VehPreview.Model.Hash == model.Hash
+                    && string.Equals(Helper.SelectedVehicle, t.Item3, StringComparison.OrdinalIgnoreCase))
+                {
+                    PreviewVehicleBasePrice = Math.Max(t.Item2, 0);
+                    RefreshPreviewVehiclePrice();
                     return;
                 }
 
@@ -2139,7 +2358,7 @@ namespace PremiumDeluxeRevamped
                     return;
                 }
 
-                CreateVehicleMenu($@".\scripts\PremiumDeluxeMotorsport\Vehicles\{t.Item2}.ini", GetVehicleCategoryDisplayName(t.Item2));
+                CreateVehicleMenu($@".\scripts\PremiumDeluxeRevamped\Vehicles\{t.Item2}.ini", GetVehicleCategoryDisplayName(t.Item2));
                 ShowOnly(VehicleMenu);
             }
             catch (Exception ex)
@@ -2193,7 +2412,7 @@ namespace PremiumDeluxeRevamped
                 VehicleMenu = NewMenu(CleanMenuText(Helper.GetLangEntry("BTN_SEARCH_RESULTS"), "Search Results").ToUpperInvariant(), true);
                 HashSet<int> existingModelHashes = new HashSet<int>();
 
-                foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeMotorsport\Vehicles\", "*.ini"))
+                foreach (string file in System.IO.Directory.GetFiles(@".\scripts\PremiumDeluxeRevamped\Vehicles\", "*.ini"))
                 {
                     if (!System.IO.File.Exists(file))
                     {
@@ -2352,24 +2571,21 @@ namespace PremiumDeluxeRevamped
                     Mods(Helper.VehPreview).LicensePlateStyle = (LicensePlateStyle)tag;
                 }
 
-                if (Helper.optRemoveColor)
+                if (sender == CPriColorMenu)
                 {
-                    if (sender == CPriColorMenu)
-                    {
-                        Mods(Helper.VehPreview).PrimaryColor = VehicleColor.MetallicBlack;
-                    }
-                    else if (sender == CSecColorMenu)
-                    {
-                        Mods(Helper.VehPreview).SecondaryColor = VehicleColor.MetallicBlack;
-                    }
-                    else if (sender.Parent == PriColorMenu)
-                    {
-                        Mods(Helper.VehPreview).ClearCustomPrimaryColor();
-                    }
-                    else if (sender.Parent == SecColorMenu)
-                    {
-                        Mods(Helper.VehPreview).ClearCustomSecondaryColor();
-                    }
+                    Mods(Helper.VehPreview).PrimaryColor = VehicleColor.MetallicBlack;
+                }
+                else if (sender == CSecColorMenu)
+                {
+                    Mods(Helper.VehPreview).SecondaryColor = VehicleColor.MetallicBlack;
+                }
+                else if (sender.Parent == PriColorMenu)
+                {
+                    Mods(Helper.VehPreview).ClearCustomPrimaryColor();
+                }
+                else if (sender.Parent == SecColorMenu)
+                {
+                    Mods(Helper.VehPreview).ClearCustomSecondaryColor();
                 }
             }
             catch (Exception ex)
@@ -2442,24 +2658,21 @@ namespace PremiumDeluxeRevamped
                     Helper.lastVehMemory.NumberPlate = (LicensePlateStyle)selectedItem.Tag;
                 }
 
-                if (Helper.optRemoveColor)
+                if (sender == CPriColorMenu)
                 {
-                    if (sender == CPriColorMenu)
-                    {
-                        Mods(Helper.VehPreview).PrimaryColor = VehicleColor.MetallicBlack;
-                    }
-                    else if (sender == CSecColorMenu)
-                    {
-                        Mods(Helper.VehPreview).SecondaryColor = VehicleColor.MetallicBlack;
-                    }
-                    else if (sender.Parent == PriColorMenu)
-                    {
-                        Mods(Helper.VehPreview).ClearCustomPrimaryColor();
-                    }
-                    else if (sender.Parent == SecColorMenu)
-                    {
-                        Mods(Helper.VehPreview).ClearCustomSecondaryColor();
-                    }
+                    Mods(Helper.VehPreview).PrimaryColor = VehicleColor.MetallicBlack;
+                }
+                else if (sender == CSecColorMenu)
+                {
+                    Mods(Helper.VehPreview).SecondaryColor = VehicleColor.MetallicBlack;
+                }
+                else if (sender.Parent == PriColorMenu)
+                {
+                    Mods(Helper.VehPreview).ClearCustomPrimaryColor();
+                }
+                else if (sender.Parent == SecColorMenu)
+                {
+                    Mods(Helper.VehPreview).ClearCustomSecondaryColor();
                 }
             }
             catch (Exception ex)
@@ -2485,24 +2698,21 @@ namespace PremiumDeluxeRevamped
                 Mods(Helper.VehPreview).PearlescentColor = Helper.lastVehMemory.PearlescentColor;
                 Mods(Helper.VehPreview).LicensePlateStyle = (LicensePlateStyle)(int)Helper.lastVehMemory.NumberPlate;
 
-                if (Helper.optRemoveColor)
+                if (sender == CPriColorMenu)
                 {
-                    if (sender == CPriColorMenu)
-                    {
-                        Mods(Helper.VehPreview).PrimaryColor = VehicleColor.MetallicBlack;
-                    }
-                    else if (sender == CSecColorMenu)
-                    {
-                        Mods(Helper.VehPreview).SecondaryColor = VehicleColor.MetallicBlack;
-                    }
-                    else if (sender.Parent == PriColorMenu)
-                    {
-                        Mods(Helper.VehPreview).ClearCustomPrimaryColor();
-                    }
-                    else if (sender.Parent == SecColorMenu)
-                    {
-                        Mods(Helper.VehPreview).ClearCustomSecondaryColor();
-                    }
+                    Mods(Helper.VehPreview).PrimaryColor = VehicleColor.MetallicBlack;
+                }
+                else if (sender == CSecColorMenu)
+                {
+                    Mods(Helper.VehPreview).SecondaryColor = VehicleColor.MetallicBlack;
+                }
+                else if (sender.Parent == PriColorMenu)
+                {
+                    Mods(Helper.VehPreview).ClearCustomPrimaryColor();
+                }
+                else if (sender.Parent == SecColorMenu)
+                {
+                    Mods(Helper.VehPreview).ClearCustomSecondaryColor();
                 }
 
                 if (sender == CPriColorMenu)

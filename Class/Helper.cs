@@ -36,20 +36,17 @@ namespace PremiumDeluxeRevamped
         public static string VC_MOTORCYCLE, VC_COMPACT, VC_COUPE, VC_SEDAN, VC_SPORT, VC_CLASSIC, VC_SUPER, VC_MUSCLE, VC_OFF_ROAD, VC_SUV, VC_VAN;
         public static string VC_INDUSTRIAL, VC_BICYCLE, VC_BOAT, VC_HELI, VC_PLANE, VC_SERVICE, VC_EMERGENCY, VC_MILITARY, VC_COMMERCIAL, VC_UTILITY;
 
-        private const string ConfigPath = @"scripts\PremiumDeluxeMotorsport\config.ini";
-        private const string DatabasePath = @"scripts\PremiumDeluxeMotorsport\database.ini";
+        private const string ConfigPath = @"scripts\PremiumDeluxeRevamped\config.ini";
+        private const string DatabasePath = @"scripts\PremiumDeluxeRevamped\database.ini";
         public static ScriptSettings config = ScriptSettings.Load(ConfigPath);
         public static ScriptSettings hiddenSave = LoadDatabaseSettings();
-        public static bool optRemoveColor = true;
-        public static bool optRemoveImg = false;
-        public static bool optRandomColor = true;
-        public static bool optFade = true;
+        public static bool optRandomColor = false;
         public static int optLastVehHash = 0;
         public static string optLastVehName = null;
         public static string optLastVehMake = null;
         public static bool optLogging = true;
-        public static bool optEnableMouse = false;
-        public static bool optRealisticVehPricing = true;
+        public static bool optEnableMouse = true;
+        public static bool optREALISTICPRICING = false;
         public static Control keyZoom = Control.NextCamera;
         public static Control keyZoomOut = Control.FrontendLt;
         public static Control keyDoor = Control.ParachuteBrakeLeft;
@@ -292,15 +289,12 @@ namespace PremiumDeluxeRevamped
 
         public static void LoadSettings()
         {
-            optRemoveColor = config.GetValue("SETTINGS", "REMOVECOLOR", true);
-            optRemoveImg = config.GetValue("SETTINGS", "REMOVESPRITE", false);
-            optRandomColor = config.GetValue("SETTINGS", "RANDOMCOLOR", true);
-            optFade = config.GetValue("SETTINGS", "FADEEFFECT", true);
+            optRandomColor = config.GetValue("SETTINGS", "RANDOMCOLOR", false);
             optLastVehHash = hiddenSave.GetValue("SETTINGS", "LASTVEHHASH", -2022483795);
             optLastVehName = hiddenSave.GetValue("SETTINGS", "LASTVEHNAME", "Pfister Comet Retro Custom");
             optLogging = config.GetValue("SETTINGS", "LOGGING", true);
-            optEnableMouse = config.GetValue("SETTINGS", "ENABLEMOUSE", false);
-            optRealisticVehPricing = config.GetValue("SETTINGS", "RealisticVehPricing", true);
+            optEnableMouse = config.GetValue("SETTINGS", "ENABLEMOUSE", true);
+            optREALISTICPRICING = config.GetValue("SETTINGS", "REALISTICPRICING", false);
             keyZoom = config.GetValue("CONTROLS", "ZOOM", Control.FrontendRt);
             keyZoomOut = config.GetValue("CONTROLS", "ZOOMOUT", Control.FrontendLt);
             keyDoor = config.GetValue("CONTROLS", "DOOR", Control.ParachuteBrakeLeft);
@@ -625,7 +619,7 @@ namespace PremiumDeluxeRevamped
 
         public static string GetLangEntry(string lang)
         {
-            string result = CFGRead.ReadCfgValue(lang, Application.StartupPath + @"\scripts\PremiumDeluxeMotorsport\Languages\" + Game.Language + ".cfg");
+            string result = CFGRead.ReadCfgValue(lang, Application.StartupPath + @"\scripts\PremiumDeluxeRevamped\Languages\" + Game.Language + ".cfg");
             return result ?? "NULL";
         }
 

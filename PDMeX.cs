@@ -1,4 +1,4 @@
-using GTA;
+﻿using GTA;
 using GTA.Native;
 using GTA.UI;
 using LemonUI;
@@ -41,20 +41,20 @@ namespace PremiumDeluxeRevamped
             {
                 Path.Combine(assemblyDirectory, BannerFileName),
                 Path.Combine(assemblyDirectory, BannerFileName),
-                Path.Combine(assemblyDirectory, "PremiumDeluxeMotorsport", "Banner", BannerFileName),
-                Path.Combine(assemblyDirectory, "PremiumDeluxeMotorsport", "Banner", BannerFileName),
-                Path.Combine(baseDirectory, "scripts", "PremiumDeluxeMotorsport", "Banner", BannerFileName),
-                Path.Combine(baseDirectory, "scripts", "PremiumDeluxeMotorsport", "Banner", BannerFileName),
+                Path.Combine(assemblyDirectory, "PremiumDeluxeRevamped", "Banner", BannerFileName),
+                Path.Combine(assemblyDirectory, "PremiumDeluxeRevamped", "Banner", BannerFileName),
+                Path.Combine(baseDirectory, "scripts", "PremiumDeluxeRevamped", "Banner", BannerFileName),
+                Path.Combine(baseDirectory, "scripts", "PremiumDeluxeRevamped", "Banner", BannerFileName),
                 Path.Combine(baseDirectory, "scripts", BannerFileName),
                 Path.Combine(baseDirectory, "scripts", BannerFileName),
                 Path.Combine(baseDirectory, BannerFileName),
                 Path.Combine(baseDirectory, BannerFileName),
-                Path.Combine(".", "scripts", "PremiumDeluxeMotorsport", "Banner", BannerFileName),
-                Path.Combine(".", "scripts", "PremiumDeluxeMotorsport", "Banner", BannerFileName),
+                Path.Combine(".", "scripts", "PremiumDeluxeRevamped", "Banner", BannerFileName),
+                Path.Combine(".", "scripts", "PremiumDeluxeRevamped", "Banner", BannerFileName),
                 Path.Combine(".", "scripts", BannerFileName),
                 Path.Combine(".", "scripts", BannerFileName),
-                Path.Combine(".", "PremiumDeluxeMotorsport", "Banner", BannerFileName),
-                Path.Combine(".", "PremiumDeluxeMotorsport", "Banner", BannerFileName),
+                Path.Combine(".", "PremiumDeluxeRevamped", "Banner", BannerFileName),
+                Path.Combine(".", "PremiumDeluxeRevamped", "Banner", BannerFileName),
                 Path.Combine(".", BannerFileName),
                 Path.Combine(".", BannerFileName),
             };
@@ -127,7 +127,7 @@ namespace PremiumDeluxeRevamped
                 return assemblyDirectory;
             }
 
-            string scriptsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "scripts", "PremiumDeluxeMotorsport", "Banner");
+            string scriptsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "scripts", "PremiumDeluxeRevamped", "Banner");
             Directory.CreateDirectory(scriptsDirectory);
             return scriptsDirectory;
         }
@@ -1585,8 +1585,19 @@ namespace PremiumDeluxeRevamped
             float safeZoneMargin = GetSafeZoneMargin();
             float rightX = 0.999f - safeZoneMargin;
             float priceY = 0.060f + (safeZoneMargin * 0.30f);
-            string priceText = "PRICE $" + Helper.VehiclePrice.ToString("N0");
-            DrawTextNormalized(priceText, rightX, priceY, 0.47f, GTA.UI.Font.ChaletLondon, Color.LightGreen, true);
+            GTA.UI.Font priceFont = GTA.UI.Font.ChaletComprimeCologne;
+            switch (Game.Language.ToString())
+            {
+                case "Chinese":
+                case "Korean":
+                case "Japanese":
+                case "ChineseSimplified":
+                    priceFont = GTA.UI.Font.ChaletLondon;
+                    break;
+            }
+
+            DrawTextNormalized("PRICE", rightX, priceY, 0.30f, GTA.UI.Font.ChaletLondon, Color.WhiteSmoke, true);
+            DrawTextNormalized("$" + Helper.VehiclePrice.ToString("N0"), rightX, priceY + 0.027f, 0.54f, priceFont, Color.FromArgb(114, 204, 114), true);
         }
 
         private static float ConvertScaledWidthToNormalized(float scaledWidth)
@@ -1731,13 +1742,35 @@ namespace PremiumDeluxeRevamped
             DrawVehicleStatRow("Traction", Helper.GetVehTraction(Helper.VehPreview), firstRowTop + (VehicleStatsRowSpacing * 3f), panelLeft);
         }
 
+        private bool menuWasVisible;
+
         private void PDMeX_Tick(object sender, EventArgs e)
         {
-            MenuHelper.RefreshMouseBehaviors();
-            MenuHelper.RefreshInstructionalButtons();
+            bool menuVisible = MenuHelper._menuPool != null && MenuHelper._menuPool.AreAnyVisible;
+            if (!menuVisible && !menuWasVisible && Helper.TaskScriptStatus == -1 && !Helper.HideHud)
+            {
+                MenuHelper.ProcessPendingVehicleChange();
+                return;
+            }
+
+            if (menuVisible || menuWasVisible)
+            {
+                MenuHelper.RefreshMouseBehaviors();
+                if (menuVisible)
+                {
+                    MenuHelper.ProcessMenuMouseWheelScrolling();
+                }
+                MenuHelper.RefreshInstructionalButtons();
+            }
+
             MenuHelper._menuPool?.Process();
             MenuHelper.ProcessPendingVehicleChange();
-            MenuHelper.RecoverHiddenMenuIfNeeded();
+            if (Helper.TaskScriptStatus == 0 || menuVisible)
+            {
+                MenuHelper.RecoverHiddenMenuIfNeeded();
+            }
+
+            menuWasVisible = menuVisible;
 
             if (Helper.HideHud)
             {
