@@ -30,7 +30,6 @@ ___________________________________
 - Added a vehicle stats viewer that displays top speed, acceleration, braking, and traction.
 
 ### [ Planned Upcoming Features ]
-- Sell vehicles at Premium Deluxe Motorsport
 - Display brand logo of vehicles 
   
 ## Credits
